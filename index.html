@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dev Sanctuary</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #06060a; overflow: hidden; cursor: none; }
+    #c {
+      position: fixed; inset: 0;
+      width: 100%; height: 100%;
+      display: block;
+    }
+    #loading {
+      position: fixed; inset: 0; z-index: 100;
+      background: #06060a;
+      display: flex; align-items: center; justify-content: center;
+      transition: opacity 0.9s ease;
+    }
+    #loading.fade { opacity: 0; pointer-events: none; }
+    .ring {
+      width: 44px; height: 44px; border-radius: 50%;
+      border: 1.5px solid rgba(255,255,255,0.06);
+      border-top-color: #00f2ff;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Music button ───────────────────────────────────────────── */
+    #music-btn {
+      position: fixed; bottom: 1.6rem; right: 1.8rem; z-index: 50;
+      width: 40px; height: 40px; border-radius: 50%;
+      background: rgba(10,10,16,0.7);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.6);
+      font-size: 1rem; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-color 0.3s, color 0.3s;
+      backdrop-filter: blur(6px);
+    }
+    #music-btn:hover { border-color: rgba(0,242,255,0.5); color: #00f2ff; }
+    #music-btn.playing { border-color: rgba(0,242,255,0.4); color: #00f2ff; }
+    #yt-frame { position: fixed; top: -9999px; left: -9999px; pointer-events: none; }
+  </style>
+</head>
+<body>
+
+<div id="loading"><div class="ring"></div></div>
+<canvas id="c"></canvas>
+<button id="music-btn" title="Toggle music">&#9834;</button>
+<div id="yt-frame"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ─── loop constant ─────────────────────────────────────────── */
+const LOOP = 8.0;
+
+/* ─── Vertex shader ─────────────────────────────────────────── */
+const VERT = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = vec4(position, 1.0);
+  }
+`;
+
+/* ─── Fragment shader ───────────────────────────────────────── */
+const FRAG = `
+  precision highp float;
+  #define TAU 6.28318530718
+  #define PI  3.14159265359
+
+  uniform sampler2D uTex;
+  uniform vec2      uRes;
+  uniform vec2      uImgRes;
+  uniform float     uLoop;  /* 0..1, perfectly periodic for looping fx */
+  uniform float     uTime;  /* raw elapsed — for cursor ripple (no loop jump) */
+  uniform vec2      uMouse; /* cursor: 0..1 screen UV, Y=0 at bottom */
+
+  varying vec2 vUv;
+
+  /* ── Remove bulbSpot: LED detection now uses image pixel analysis ────── */
+
+  /* ── deterministic gradient noise — no random() ─────────────── */
+  vec2 _g(vec2 p){
+    p = vec2(dot(p,vec2(127.1,311.7)), dot(p,vec2(269.5,183.3)));
+    return fract(sin(p)*43758.5453)*2.0-1.0;
+  }
+  float gn(vec2 p){
+    vec2 i=floor(p), f=fract(p), u=f*f*(3.0-2.0*f);
+    return mix(
+      mix(dot(_g(i),f), dot(_g(i+vec2(1,0)),f-vec2(1,0)),u.x),
+      mix(dot(_g(i+vec2(0,1)),f-vec2(0,1)), dot(_g(i+vec2(1,1)),f-vec2(1,1)),u.x),
+    u.y);
+  }
+  float fbm(vec2 p){
+    return gn(p)*0.500 + gn(p*2.1)*0.250 + gn(p*4.3)*0.125;
+  }
+
+  /* ── soft rectangular mask ──────────────────────────────── */
+  float box(vec2 uv, vec4 r, float f){
+    return smoothstep(r.x,r.x+f,uv.x)*(1.-smoothstep(r.z-f,r.z,uv.x))
+          *smoothstep(r.y,r.y+f,uv.y)*(1.-smoothstep(r.w-f,r.w,uv.y));
+  }
+
+  /* ── Fish SDF ─────────────────────────────────────────────────
+     p:  fragment pos (p-space).  fc: fish centre.
+     d:  swim direction +1/-1.   sz: body half-height UV.
+     wg: body-wave amount.       AR: uRes.x/uRes.y.              */
+  float fish(vec2 p, vec2 fc, float d, float sz, float wg, float AR){
+    vec2 q = (p - fc) * vec2(AR, 1.0); /* pixel-proportion space   */
+    q.x   *= d;                          /* local +x = forward       */
+    q.y   -= wg * q.x * abs(q.x) * 0.018; /* body-wave curve        */
+    float ps  = sz * AR;                 /* body half-height in px-prop */
+    /* Body: elongated ellipse 2.5 : 1 */
+    float body = smoothstep(ps, ps*0.5, length(vec2(q.x/2.5, q.y)));
+    /* Tail: rounder lobe behind body  */
+    vec2  tq   = q + vec2(ps*2.3, 0.0);
+    float tail = smoothstep(ps*0.9, 0.0, length(vec2(tq.x/1.1, tq.y/0.85)))
+               * step(0.0, -(q.x + ps*0.2));  /* behind body only    */
+    return clamp(body + tail*0.75, 0.0, 1.0);
+  }
+
+  /* ── caustic veins — two fbm layers interfering ─────────────── */
+  float caustic(vec2 uv, float t){
+    float a1 = t*TAU, a2 = t*TAU*0.61+1.4;
+    vec2 o1 = vec2(cos(a1), sin(a1))*0.20;
+    vec2 o2 = vec2(cos(a2),-sin(a2))*0.14;
+    float n1 = fbm(uv+o1);
+    float n2 = fbm(uv+o2);
+    float v  = 1.0 - smoothstep(0.0, 0.14, abs(n1-n2));
+    return pow(v, 5.0);   /* sharp thin veins only */
+  }
+
+  void main(){
+    /* 1. cover-fit UV  — preserves full image, fills viewport */
+    float imgAR = uImgRes.x/uImgRes.y;
+    float scrAR = uRes.x/uRes.y;
+    vec2 uv = vUv;
+    if(scrAR > imgAR){
+      float s = imgAR/scrAR;
+      uv.y = (vUv.y-0.5)*s+0.5;
+    } else {
+      float s = scrAR/imgAR;
+      uv.x = (vUv.x-0.5)*s+0.5;
+    }
+
+    /* 2. image-space coords: p.y=0 at top */
+    vec2 p = vec2(uv.x, 1.0-uv.y);
+
+    float t = uLoop; /* 0..1 */
+
+    /* ─── REGION MASKS (tuned to the actual image) ───────────────
+       Image layout (x left→right, y top→bottom, all 0..1):
+         Aquarium glass interior : x 0.67..0.97,  y 0.12..0.62
+         Aquarium stand/base     : x 0.62..0.99,  y 0.60..0.80
+         Caustic floor zone      : x 0.38..0.90,  y 0.50..0.96
+         Monitor screen          : x 0.10..0.42,  y 0.26..0.68
+         PC RGB side panel       : x 0.02..0.13,  y 0.50..0.82
+         Fairy-lights strip      : x 0.05..0.55,  y 0.04..0.24
+         Dog / rug               : x 0.40..0.78,  y 0.62..0.98
+    ─────────────────────────────────────────────────────────────── */
+    float aqGlass  = box(p, vec4(0.67, 0.12, 0.97, 0.62), 0.025);
+    /* Tight INNER water only — excludes glass frame so frame stays still */
+    float aqInner  = box(p, vec4(0.71, 0.17, 0.94, 0.59), 0.04);
+    float aqSurf   = box(p, vec4(0.67, 0.10, 0.97, 0.20), 0.015);
+    float causFl   = box(p, vec4(0.55, 0.58, 0.92, 0.87), 0.04);
+    float monMask  = box(p, vec4(0.10, 0.26, 0.42, 0.68), 0.025);
+    /* PC RGB: tiny precise window on tower, heavy feather prevents box look */
+    float pcWin    = box(p, vec4(0.035, 0.53, 0.105, 0.72), 0.04);
+    float dogMk    = box(p, vec4(0.40, 0.62, 0.78, 0.98), 0.04);
+
+    /* ─── WATER RIPPLE — only inner water, glass frame untouched ── */
+    vec2 sampUv = uv;
+    if(aqInner > 0.001){
+      /* Very small amplitude so it reads as water, not glass distortion */
+      float rx = sin(p.y*32.0 + t*TAU      )*0.00045
+               + sin(p.y*16.0 + t*TAU*2.0  )*0.00020;
+      float ry = cos(p.x*28.0 + t*TAU+0.9  )*0.00045
+               + cos(p.x*14.0 + t*TAU*2.0  )*0.00020;
+      sampUv += vec2(rx, -ry) * aqInner;
+    }
+
+    /* ─── CURSOR COVER-FIT POSITION (for glow zone detection) ─── */
+    vec2 mouseCov = uMouse;
+    if(uRes.x/uRes.y > uImgRes.x/uImgRes.y){
+      float s = (uImgRes.x/uImgRes.y)/(uRes.x/uRes.y);
+      mouseCov.y = (uMouse.y-0.5)*s+0.5;
+    } else {
+      float s = (uRes.x/uRes.y)/(uImgRes.x/uImgRes.y);
+      mouseCov.x = (uMouse.x-0.5)*s+0.5;
+    }
+
+
+    /* ─── DOG BREATHING WARP ────────────────────────────────────── */
+    float breath = sin(t*TAU) * 0.0012 * dogMk;
+    sampUv.y -= breath;
+
+    /* ─── SAMPLE BASE IMAGE ──────────────────────────────────────── */
+    vec4 col = texture2D(uTex, sampUv);
+
+    /* ─── ANIMATED WATER REFLECTION ON FLOOR ─────────────────────────
+       Two crossing sine-wave sets simulate moving water-light bands.
+       Both use integer multiples of t*TAU — perfectly seamless loop.  */
+    float existingCyan = clamp(col.b - col.r * 1.2, 0.0, 1.0) * causFl;
+    float wave1  = sin(p.x*26.0 + t*TAU*2.0) * sin(p.y*16.0 + t*TAU*1.0);
+    float wave2  = sin(p.x*18.0 - t*TAU*2.0 + 1.57) * cos(p.y*20.0 - t*TAU*1.0);
+    float wAnim  = (wave1*0.6 + wave2*0.4 + 1.0) * 0.5;
+    col.rgb     *= mix(1.0, 0.72 + 0.30*wAnim, existingCyan * 2.8);
+
+    /* ─── AQUARIUM GLOW PULSE ────────────────────────────────────
+       Slow sine — 0.5+0.5*sin gives 0..1, no randomness            */
+    float aqPulse = (0.5 + 0.5*sin(t*TAU)) * 0.06;
+    col.rgb += aqPulse * vec3(0.10, 0.65, 1.00) * aqGlass;
+
+    /* ─── WATER SURFACE SHIMMER ──────────────────────────────────
+       Thin highlight band at top of tank, fast lateral oscillation  */
+    float shimmer = (0.5+0.5*sin(p.x*38.0 + t*TAU*3.0)) * 0.07 * aqSurf;
+    col.rgb += shimmer * vec3(0.6, 1.0, 1.0);
+
+    /* ─── COFFEE MUG STEAM ───────────────────────────────────────────
+       Improved wispy fumes rising from the mug.
+       Uses a vertical scroll + horizontal sway for natural motion.  */
+    float mugX  = 0.258;               /* Adjusted slightly based on image */
+    float mugY0 = 0.690;               /* Adjusted to rim position */
+    float rise  = mugY0 - p.y;
+    float xOff  = p.x - mugX;
+    if(rise > 0.0 && rise < 0.25 && abs(xOff) < 0.06){
+      float time = uTime * 0.8;
+      /* Suv for smoke noise: scroll UP with time */
+      vec2 suv = vec2(xOff * 15.0 + sin(rise*10.0 + time)*0.2, rise * 8.0 - time);
+      float noise = fbm(suv) * 0.6 + fbm(suv * 2.5 + time) * 0.4;
+      
+      float intensity = smoothstep(0.4, 0.7, noise);
+      intensity *= smoothstep(0.0, 0.05, rise);      /* Fade in at rim */
+      intensity *= smoothstep(0.25, 0.1, rise);     /* Fade out as it rises */
+      intensity *= smoothstep(0.06, 0.0, abs(xOff)); /* Horizontal containment */
+      
+      col.rgb = mix(col.rgb, vec3(0.9, 0.9, 0.95), intensity * 0.6);
+    }
+
+    /* ─── FISH ─────────────────────────────────────────────────────────
+       step() clip = hard boundary, zero feather. Fish body + travel
+       designed so fish never get within 0.015 UV of any glass edge.  */
+    float AR = uRes.x / uRes.y;
+    /* Hard glass boundary — step() guarantees zero bleed */
+    float fc = step(0.750, p.x) * step(p.x, 0.905)
+             * step(0.210, p.y) * step(p.y, 0.555);
+
+    /* Fish A — upper-mid lane, moved down from 0.280 → 0.340 */
+    float fxA = 0.828 + sin(t*TAU*1.0 + 0.00) * 0.028;
+    float fyA = 0.340 + sin(t*TAU*1.0 + 1.20) * 0.008;
+    float fA  = fish(p, vec2(fxA,fyA), sign(cos(t*TAU+0.00)),
+                     0.003, sin(t*TAU*2.0)*0.28, AR) * fc;
+
+    /* Fish B — mid lane, sz=0.0025, travel ±0.026 */
+    float fxB = 0.828 + sin(t*TAU*2.0 + 2.10) * 0.026;
+    float fyB = 0.370 + sin(t*TAU*2.0 + 3.80) * 0.009;
+    float fB  = fish(p, vec2(fxB,fyB), sign(cos(t*TAU*2.0+2.10)),
+                     0.0025, sin(t*TAU*4.0+2.10)*0.25, AR) * fc;
+
+    /* Fish C — lower-mid lane, moved up from 0.455 → 0.400 */
+    float fxC = 0.828 + sin(t*TAU*2.0 + 4.40) * 0.030;
+    float fyC = 0.400 + sin(t*TAU*2.0 + 0.50) * 0.008;
+    float fC  = fish(p, vec2(fxC,fyC), sign(cos(t*TAU*2.0+4.40)),
+                     0.0025, sin(t*TAU*4.0+4.40)*0.23, AR) * fc;
+
+    col.rgb = mix(col.rgb, vec3(0.95, 0.42, 0.06), fA * 0.90);
+    col.rgb = mix(col.rgb, vec3(1.00, 0.65, 0.10), fB * 0.86);
+    col.rgb = mix(col.rgb, vec3(0.92, 0.38, 0.08), fC * 0.84);
+    col.rgb += vec3(1.0,0.85,0.5) * fA * 0.12;
+    col.rgb += vec3(1.0,0.90,0.6) * fB * 0.10;
+    col.rgb += vec3(1.0,0.80,0.4) * fC * 0.10;
+
+    /* Fish D — silver-blue, tiny, fast (3 cycles), between A and B */
+    float fxD = 0.828 + sin(t*TAU*3.0 + 1.05) * 0.024;
+    float fyD = 0.355 + sin(t*TAU*3.0 + 2.30) * 0.007;
+    float fD  = fish(p, vec2(fxD,fyD), sign(cos(t*TAU*3.0+1.05)),
+                     0.002, sin(t*TAU*6.0+1.05)*0.22, AR) * fc;
+
+    /* Fish E — warm gold, slightly larger, slow (1 cycle, phase offset) */
+    float fxE = 0.828 + sin(t*TAU*1.0 + 3.14) * 0.032;
+    float fyE = 0.385 + sin(t*TAU*1.0 + 4.50) * 0.007;
+    float fE  = fish(p, vec2(fxE,fyE), sign(cos(t*TAU*1.0+3.14)),
+                     0.0028, sin(t*TAU*2.0+3.14)*0.26, AR) * fc;
+
+    /* Fish F — small orange, 2 cycles, between B and C */
+    float fxF = 0.828 + sin(t*TAU*2.0 + 0.70) * 0.027;
+    float fyF = 0.415 + sin(t*TAU*2.0 + 5.80) * 0.007;
+    float fF  = fish(p, vec2(fxF,fyF), sign(cos(t*TAU*2.0+0.70)),
+                     0.002, sin(t*TAU*4.0+0.70)*0.20, AR) * fc;
+
+    col.rgb = mix(col.rgb, vec3(0.65, 0.80, 0.95), fD * 0.82);
+    col.rgb = mix(col.rgb, vec3(1.00, 0.72, 0.12), fE * 0.88);
+    col.rgb = mix(col.rgb, vec3(0.90, 0.35, 0.05), fF * 0.84);
+    col.rgb += vec3(0.8,0.9,1.0) * fD * 0.10;
+    col.rgb += vec3(1.0,0.88,0.5) * fE * 0.11;
+    col.rgb += vec3(1.0,0.82,0.4) * fF * 0.10;
+
+    /* ─── FAIRY BULBS: detect warm bright pixels already in image ───────
+       No hardcoded UV positions — we find the actual bulb pixels by
+       their warm luminance, then throb them with a phase that varies
+       along X so adjacent bulbs feel independent.                    */
+    float fairyStrip = box(p, vec4(0.06, 0.055, 0.46, 0.19), 0.018);
+    if(fairyStrip > 0.001){
+      /* Warm brightness channel: bulbs are cream/amber, bg is dark   */
+      float warmLum   = dot(col.rgb, vec3(0.55, 0.38, 0.07));
+      /* Only pixels that are already warm+bright qualify as bulbs     */
+      float isBulb    = smoothstep(0.28, 0.60, warmLum) * fairyStrip;
+      /* Phase varies smoothly with X so each bulb throbs at own time  */
+      float bulbThrob = 0.55 + 0.45 * sin(t*TAU + p.x*24.0);
+      /* Boost the existing bulb pixels — core brightens + warm halo  */
+      col.rgb        += col.rgb * isBulb * bulbThrob * 0.50;
+      col.rgb        += isBulb * bulbThrob * vec3(1.0,0.82,0.35) * 0.12;
+    }
+
+    /* ─── PC RGB — tint existing pixels, heavy feather, no additive box ── */
+    float rC = 0.5+0.5*sin(t*TAU);
+    float gC = 0.5+0.5*sin(t*TAU + TAU/3.0);
+    float bC = 0.5+0.5*sin(t*TAU + TAU*2.0/3.0);
+    /* Multiply-tint: blends with existing dark pixels so no box outline */
+    vec3 rgbTint = vec3(rC,gC,bC);
+    col.rgb = mix(col.rgb, col.rgb*(1.0+rgbTint*0.7), pcWin*0.55);
+
+    /* ─── MONITOR SCROLL GLOW ────────────────────────────────────
+       Periodic horizontal scanline travelling upward               */
+    float scanY  = mod(p.y*5.0 - t*2.2, 1.0);
+    float scanBd = pow(abs(sin(scanY*PI)), 7.0) * 0.016;
+    float flick  = 0.009 * sin(t*TAU*5.0);
+    col.rgb += (scanBd+flick) * vec3(0.35, 1.0, 0.5) * monMask;
+
+    /* ─── GLOBAL AMBIENT SWELL ───────────────────────────────── */
+    col.rgb *= 1.0 + 0.018 * sin(t*TAU);
+
+    /* ─── CURSOR SCENE-AWARE GLOW ────────────────────────────────
+       Colour adapts to whichever zone the cursor is in.            */
+    vec2  mP         = vec2(mouseCov.x, 1.0-mouseCov.y);
+    float inAq       = box(mP, vec4(0.67,0.12,0.97,0.62), 0.04);
+    float inFairy    = box(mP, vec4(0.07,0.05,0.52,0.20), 0.04);
+    float inDog      = box(mP, vec4(0.40,0.62,0.78,0.98), 0.04);
+    vec3  glowCol    = mix(vec3(1.0,0.93,0.80), vec3(0.2,0.85,1.0), inAq);
+    glowCol          = mix(glowCol, vec3(1.0,0.78,0.35), inFairy);
+    glowCol          = mix(glowCol, vec3(1.0,0.72,0.40), inDog);
+    /* Gaussian glow around cursor in screen space ──────────────────
+       Tightened radius (150 vs 55) and reduced brightness (0.055)  */
+    float screenD    = length((vUv - uMouse) * vec2(uRes.x/uRes.y, 1.0));
+    float cursorGlow = exp(-screenD*screenD*150.0) * 0.055;
+    col.rgb         += glowCol * cursorGlow;
+    /* Cursor: smaller dot + thinner ring */
+    float cDot  = smoothstep(0.004, 0.0,   screenD);
+    float cRing = smoothstep(0.015, 0.012, screenD) - smoothstep(0.012, 0.009, screenD);
+    col.rgb     = mix(col.rgb, glowCol, cDot + cRing*0.65);
+
+    /* ─── VIGNETTE ───────────────────────────────────────────── */
+    float vig = uv.x*(1.-uv.x)*uv.y*(1.-uv.y)*14.0;
+    col.rgb  *= 0.80 + 0.20*clamp(vig,0.0,1.0);
+
+    gl_FragColor = vec4(clamp(col.rgb,0.0,1.0), 1.0);
+  }
+`;
+
+/* ─── Three.js setup ──────────────────────────────────────────── */
+(function(){
+  const canvas  = document.getElementById('c');
+  const loading = document.getElementById('loading');
+
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    antialias: true,
+    powerPreference: 'high-performance'
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  const camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+  const scene  = new THREE.Scene();
+
+  const uniforms = {
+    uTex:    { value: null },
+    uRes:    { value: new THREE.Vector2() },
+    uImgRes: { value: new THREE.Vector2(1,1) },
+    uLoop:   { value: 0 },
+    uTime:   { value: 0 },
+    uMouse:  { value: new THREE.Vector2(0.5, 0.5) }
+  };
+
+  /* Mouse / touch tracking */
+  window.addEventListener('mousemove', e => {
+    uniforms.uMouse.value.set(
+      e.clientX / window.innerWidth,
+      1.0 - e.clientY / window.innerHeight
+    );
+  }, { passive: true });
+  window.addEventListener('touchmove', e => {
+    const t0 = e.touches[0];
+    uniforms.uMouse.value.set(
+      t0.clientX / window.innerWidth,
+      1.0 - t0.clientY / window.innerHeight
+    );
+  }, { passive: true });
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader:   VERT,
+    fragmentShader: FRAG,
+    depthTest:  false,
+    depthWrite: false
+  });
+
+  scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2), mat));
+
+  function resize(){
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w, h, false);
+    uniforms.uRes.value.set(w, h);
+  }
+  window.addEventListener('resize', resize, { passive: true });
+  resize();
+
+  const clock = new THREE.Clock();
+
+  function tick(){
+    requestAnimationFrame(tick);
+    const elapsed = clock.getElapsedTime();
+    uniforms.uLoop.value = (elapsed % LOOP) / LOOP;
+    uniforms.uTime.value = elapsed;
+    renderer.render(scene, camera);
+  }
+
+  new THREE.TextureLoader().load(
+    'hero.png',
+    (tex) => {
+      tex.minFilter    = THREE.LinearFilter;
+      tex.magFilter    = THREE.LinearFilter;
+      tex.generateMipmaps = false;
+      uniforms.uTex.value = tex;
+      uniforms.uImgRes.value.set(
+        tex.image.naturalWidth  || tex.image.width,
+        tex.image.naturalHeight || tex.image.height
+      );
+      loading.classList.add('fade');
+      setTimeout(() => loading.style.display = 'none', 950);
+      tick();
+    },
+    undefined,
+    (err) => {
+      console.error('hero.png load failed:', err);
+      loading.classList.add('fade');
+      setTimeout(() => loading.style.display = 'none', 950);
+      tick();
+    }
+  );
+})();
+</script>
+
+<!-- YouTube IFrame API -->
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+(function(){
+  const btn = document.getElementById('music-btn');
+  const VID = 'jfKfPfyJRdk';
+  let player, ready = false, playing = false, started = false;
+
+  window.onYouTubeIframeAPIReady = function(){
+    player = new YT.Player('yt-frame', {
+      videoId: VID,
+      playerVars: { autoplay: 0, controls: 0, loop: 1, playlist: VID, mute: 0 },
+      events: {
+        onReady: () => { ready = true; tryPlay(); },
+        onStateChange: (e) => {
+          const isPlaying = e.data === YT.PlayerState.PLAYING;
+          btn.classList.toggle('playing', isPlaying);
+          btn.title = isPlaying ? 'Pause music' : 'Play music';
+        }
+      }
+    });
+  };
+
+  function tryPlay(){
+    if(ready && !playing){
+      player.setVolume(20);
+      player.playVideo();
+      playing = true;
+    }
+  }
+
+  /* Start on first real user gesture — guaranteed to work in all browsers */
+  function onFirstGesture(){
+    if(started) return;
+    started = true;
+    tryPlay();
+    ['mousemove','click','keydown','touchstart'].forEach(ev =>
+      window.removeEventListener(ev, onFirstGesture)
+    );
+  }
+  ['mousemove','click','keydown','touchstart'].forEach(ev =>
+    window.addEventListener(ev, onFirstGesture, { once: true, passive: true })
+  );
+
+  btn.addEventListener('click', () => {
+    if(!ready) return;
+    if(playing){
+      player.pauseVideo();
+      playing = false;
+    } else {
+      player.playVideo();
+      playing = true;
+    }
+  });
+})();
+</script>
+</body>
+</html>
