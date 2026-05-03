@@ -207,7 +207,7 @@ const FRAG = `
     float wave1  = sin(p.x*26.0 + t*TAU*2.0) * sin(p.y*16.0 + t*TAU*1.0);
     float wave2  = sin(p.x*18.0 - t*TAU*2.0 + 1.57) * cos(p.y*20.0 - t*TAU*1.0);
     float wAnim  = (wave1*0.6 + wave2*0.4 + 1.0) * 0.5;
-    col.rgb     *= mix(1.0, 0.72 + 0.30*wAnim, existingCyan * 2.8);
+    col.rgb     *= mix(1.0, 0.78 + 0.22*wAnim, existingCyan * 2.1);
 
     /* ─── AQUARIUM GLOW PULSE ────────────────────────────────────
        Slow sine — 0.5+0.5*sin gives 0..1, no randomness            */
@@ -220,24 +220,27 @@ const FRAG = `
     col.rgb += shimmer * vec3(0.6, 1.0, 1.0);
 
     /* ─── COFFEE MUG STEAM ───────────────────────────────────────────
-       Improved wispy fumes rising from the mug.
-       Uses a vertical scroll + horizontal sway for natural motion.  */
-    float mugX  = 0.258;               /* Adjusted slightly based on image */
-    float mugY0 = 0.690;               /* Adjusted to rim position */
+       Soft, volumetric fumes rising from the white mug.
+       Uses a smoother FBM blend and lower noise contrast.           */
+    float mugX  = 0.255;               /* Centered on white mug      */
+    float mugY0 = 0.720;               /* Mug rim position           */
     float rise  = mugY0 - p.y;
     float xOff  = p.x - mugX;
-    if(rise > 0.0 && rise < 0.25 && abs(xOff) < 0.06){
-      float time = uTime * 0.8;
-      /* Suv for smoke noise: scroll UP with time */
-      vec2 suv = vec2(xOff * 15.0 + sin(rise*10.0 + time)*0.2, rise * 8.0 - time);
-      float noise = fbm(suv) * 0.6 + fbm(suv * 2.5 + time) * 0.4;
+    if(rise > 0.0 && rise < 0.22 && abs(xOff) < 0.05){
+      float time = uTime * 0.6;
+      /* Suv for smoke noise: slower, smoother scroll */
+      vec2 suv = vec2(xOff * 12.0 + sin(rise*12.0 + time)*0.15, rise * 6.0 - time);
+      float noise = fbm(suv) * 0.7 + fbm(suv * 2.1 + time*0.5) * 0.3;
       
-      float intensity = smoothstep(0.4, 0.7, noise);
-      intensity *= smoothstep(0.0, 0.05, rise);      /* Fade in at rim */
-      intensity *= smoothstep(0.25, 0.1, rise);     /* Fade out as it rises */
-      intensity *= smoothstep(0.06, 0.0, abs(xOff)); /* Horizontal containment */
+      /* Softer intensity thresholding */
+      float intensity = smoothstep(0.35, 0.65, noise);
+      intensity *= smoothstep(0.0, 0.04, rise);      /* Smooth fade in */
+      intensity *= smoothstep(0.22, 0.12, rise);     /* Smooth fade out */
+      intensity *= smoothstep(0.05, 0.0, abs(xOff)); /* Horizontal falloff */
       
-      col.rgb = mix(col.rgb, vec3(0.9, 0.9, 0.95), intensity * 0.6);
+      /* Bloom-like glow for the steam */
+      col.rgb = mix(col.rgb, vec3(0.92, 0.92, 0.98), intensity * 0.45);
+      col.rgb += vec3(1.0, 1.0, 1.0) * intensity * 0.08;
     }
 
     /* ─── FISH ─────────────────────────────────────────────────────────
