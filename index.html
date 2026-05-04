@@ -557,11 +557,16 @@
           videoId: VID,
           playerVars: { autoplay: 1, controls: 0, loop: 1, playlist: VID, mute: 0, origin: window.location.origin },
           events: {
-            onReady: () => { ready = true; tryPlay(); },
+            onReady: () => { 
+              ready = true; 
+              player.setVolume(20);
+              tryPlay(); 
+            },
             onStateChange: (e) => {
-              const isPlaying = e.data === YT.PlayerState.PLAYING;
-              btn.classList.toggle('playing', isPlaying);
-              btn.title = isPlaying ? 'Pause music' : 'Play music';
+              /* Sync our internal state with the actual YouTube player state */
+              playing = (e.data === YT.PlayerState.PLAYING);
+              btn.classList.toggle('playing', playing);
+              btn.title = playing ? 'Pause music' : 'Play music';
             }
           }
         });
@@ -569,13 +574,12 @@
 
       function tryPlay() {
         if (ready && !playing) {
-          player.setVolume(20);
           player.playVideo();
-          playing = true;
+          /* Note: browsers might block this without user gesture */
         }
       }
 
-      /* Start on first real user gesture — guaranteed to work in all browsers */
+      /* First gesture trigger: helps bypass strict autoplay policies */
       function onFirstGesture() {
         if (started) return;
         started = true;
@@ -588,14 +592,13 @@
         window.addEventListener(ev, onFirstGesture, { once: true, passive: true })
       );
 
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation(); // Prevent re-triggering gesture listeners
         if (!ready) return;
         if (playing) {
           player.pauseVideo();
-          playing = false;
         } else {
           player.playVideo();
-          playing = true;
         }
       });
     })();
