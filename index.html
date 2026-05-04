@@ -208,8 +208,9 @@
     float scrAR = uRes.x/uRes.y;
     vec2 uv = vUv;
     
-    /* Subtle pan offset for mobile/portrait to see sides */
-    float pan = (uMouse.x - 0.5) * 0.15; 
+    /* Stronger pan for mobile to see both sides of the room */
+    float panRange = (scrAR < 1.1) ? 1.0 : 0.4; 
+    float pan = (uMouse.x - 0.5) * panRange; 
     
     if(scrAR > imgAR){
       float s = imgAR/scrAR;
@@ -467,9 +468,12 @@
         uniforms.uIsTouch.value = 1.0;
       }
 
+      const mouseTarget  = new THREE.Vector2(0.5, 0.5);
+      const mouseCurrent = new THREE.Vector2(0.5, 0.5);
+
       /* Mouse / touch tracking */
       window.addEventListener('mousemove', e => {
-        uniforms.uMouse.value.set(
+        mouseTarget.set(
           e.clientX / window.innerWidth,
           1.0 - e.clientY / window.innerHeight
         );
@@ -479,7 +483,7 @@
       }, { once: true });
       window.addEventListener('touchmove', e => {
         const t0 = e.touches[0];
-        uniforms.uMouse.value.set(
+        mouseTarget.set(
           t0.clientX / window.innerWidth,
           1.0 - t0.clientY / window.innerHeight
         );
@@ -508,6 +512,12 @@
       function tick() {
         requestAnimationFrame(tick);
         const elapsed = clock.getElapsedTime();
+        
+        /* Cinematic smoothing: camera drifts to target */
+        const lerpFactor = uniforms.uIsTouch.value > 0.5 ? 0.08 : 0.15;
+        mouseCurrent.lerp(mouseTarget, lerpFactor);
+        uniforms.uMouse.value.copy(mouseCurrent);
+        
         uniforms.uLoop.value = (elapsed % LOOP) / LOOP;
         uniforms.uTime.value = elapsed;
         renderer.render(scene, camera);
