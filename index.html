@@ -363,6 +363,13 @@
     float fF  = fish(p, vec2(fxF,fyF), sign(cos(t*TAU*2.0+0.70)),
                      0.0035, sin(t*TAU*4.0+0.70)*0.20, imgAR_real) * fc;
 
+    col.rgb = mix(col.rgb, vec3(0.95, 0.42, 0.06), fA * 0.90);
+    col.rgb = mix(col.rgb, vec3(1.00, 0.65, 0.10), fB * 0.86);
+    col.rgb = mix(col.rgb, vec3(0.92, 0.38, 0.08), fC * 0.84);
+    col.rgb += vec3(1.0,0.85,0.5) * fA * 0.12;
+    col.rgb += vec3(1.0,0.90,0.6) * fB * 0.10;
+    col.rgb += vec3(1.0,0.80,0.4) * fC * 0.10;
+
     col.rgb = mix(col.rgb, vec3(0.65, 0.80, 0.95), fD * 0.82);
     col.rgb = mix(col.rgb, vec3(1.00, 0.72, 0.12), fE * 0.88);
     col.rgb = mix(col.rgb, vec3(0.90, 0.35, 0.05), fF * 0.84);
