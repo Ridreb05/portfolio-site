@@ -174,20 +174,22 @@
   }
 
   /* ── Fish SDF ─────────────────────────────────────────────────
-     p:  fragment pos (p-space).  fc: fish centre.
-     d:  swim direction +1/-1.   sz: body half-height UV.
-     wg: body-wave amount.       AR: uRes.x/uRes.y.              */
+     p:  fragment pos (image UV space).  fc: fish centre.
+     d:  swim direction +1/-1.   sz: body vertical radius.
+     wg: body-wave amount.       AR: uImgRes.x/uImgRes.y.         */
   float fish(vec2 p, vec2 fc, float d, float sz, float wg, float AR){
-    vec2 q = (p - fc) * vec2(AR, 1.0); /* pixel-proportion space   */
+    vec2 q = p - fc;
+    q.x   *= AR;                         /* Make q-space square      */
     q.x   *= d;                          /* local +x = forward       */
     q.y   -= wg * q.x * abs(q.x) * 0.018; /* body-wave curve        */
-    float ps  = sz * AR;                 /* body half-height in px-prop */
-    /* Body: elongated ellipse 2.5 : 1 */
-    float body = smoothstep(ps, ps*0.5, length(vec2(q.x/2.5, q.y)));
+    
+    /* Body: elongated ellipse 2.8 : 1 ratio in square units        */
+    float body = smoothstep(sz, sz*0.5, length(vec2(q.x/2.8, q.y)));
+    
     /* Tail: rounder lobe behind body  */
-    vec2  tq   = q + vec2(ps*2.3, 0.0);
-    float tail = smoothstep(ps*0.9, 0.0, length(vec2(tq.x/1.1, tq.y/0.85)))
-               * step(0.0, -(q.x + ps*0.2));  /* behind body only    */
+    vec2  tq   = q + vec2(sz*2.3, 0.0);
+    float tail = smoothstep(sz*0.9, 0.0, length(vec2(tq.x/1.1, tq.y/0.85)))
+               * step(0.0, -(q.x + sz*0.2));  /* behind body only    */
     return clamp(body + tail*0.75, 0.0, 1.0);
   }
 
@@ -320,53 +322,46 @@
     /* ─── FISH ─────────────────────────────────────────────────────────
        step() clip = hard boundary, zero feather. Fish body + travel
        designed so fish never get within 0.015 UV of any glass edge.  */
-    float AR = uRes.x / uRes.y;
+    float imgAR_real = uImgRes.x / uImgRes.y;
     /* Hard glass boundary — step() guarantees zero bleed */
     float fc = step(0.750, p.x) * step(p.x, 0.905)
              * step(0.210, p.y) * step(p.y, 0.555);
 
-    /* Fish A — upper-mid lane, moved down from 0.280 → 0.340 */
+    /* Fish A — upper-mid lane, sz=0.005, ratio 2.8 */
     float fxA = 0.828 + sin(t*TAU*1.0 + 0.00) * 0.028;
     float fyA = 0.340 + sin(t*TAU*1.0 + 1.20) * 0.008;
     float fA  = fish(p, vec2(fxA,fyA), sign(cos(t*TAU+0.00)),
-                     0.003, sin(t*TAU*2.0)*0.28, AR) * fc;
+                     0.005, sin(t*TAU*2.0)*0.28, imgAR_real) * fc;
 
-    /* Fish B — mid lane, sz=0.0025, travel ±0.026 */
+    /* Fish B — mid lane, sz=0.0045 */
     float fxB = 0.828 + sin(t*TAU*2.0 + 2.10) * 0.026;
     float fyB = 0.370 + sin(t*TAU*2.0 + 3.80) * 0.009;
     float fB  = fish(p, vec2(fxB,fyB), sign(cos(t*TAU*2.0+2.10)),
-                     0.0025, sin(t*TAU*4.0+2.10)*0.25, AR) * fc;
+                     0.0045, sin(t*TAU*4.0+2.10)*0.25, imgAR_real) * fc;
 
-    /* Fish C — lower-mid lane, moved up from 0.455 → 0.400 */
+    /* Fish C — lower-mid lane, sz=0.0045 */
     float fxC = 0.828 + sin(t*TAU*2.0 + 4.40) * 0.030;
     float fyC = 0.400 + sin(t*TAU*2.0 + 0.50) * 0.008;
     float fC  = fish(p, vec2(fxC,fyC), sign(cos(t*TAU*2.0+4.40)),
-                     0.0025, sin(t*TAU*4.0+4.40)*0.23, AR) * fc;
+                     0.0045, sin(t*TAU*4.0+4.40)*0.23, imgAR_real) * fc;
 
-    col.rgb = mix(col.rgb, vec3(0.95, 0.42, 0.06), fA * 0.90);
-    col.rgb = mix(col.rgb, vec3(1.00, 0.65, 0.10), fB * 0.86);
-    col.rgb = mix(col.rgb, vec3(0.92, 0.38, 0.08), fC * 0.84);
-    col.rgb += vec3(1.0,0.85,0.5) * fA * 0.12;
-    col.rgb += vec3(1.0,0.90,0.6) * fB * 0.10;
-    col.rgb += vec3(1.0,0.80,0.4) * fC * 0.10;
-
-    /* Fish D — silver-blue, tiny, fast (3 cycles), between A and B */
+    /* Fish D — silver-blue, tiny, fast */
     float fxD = 0.828 + sin(t*TAU*3.0 + 1.05) * 0.024;
     float fyD = 0.355 + sin(t*TAU*3.0 + 2.30) * 0.007;
     float fD  = fish(p, vec2(fxD,fyD), sign(cos(t*TAU*3.0+1.05)),
-                     0.002, sin(t*TAU*6.0+1.05)*0.22, AR) * fc;
+                     0.0035, sin(t*TAU*6.0+1.05)*0.22, imgAR_real) * fc;
 
-    /* Fish E — warm gold, slightly larger, slow (1 cycle, phase offset) */
+    /* Fish E — warm gold, slightly larger */
     float fxE = 0.828 + sin(t*TAU*1.0 + 3.14) * 0.032;
     float fyE = 0.385 + sin(t*TAU*1.0 + 4.50) * 0.007;
     float fE  = fish(p, vec2(fxE,fyE), sign(cos(t*TAU*1.0+3.14)),
-                     0.0028, sin(t*TAU*2.0+3.14)*0.26, AR) * fc;
+                     0.0055, sin(t*TAU*2.0+3.14)*0.26, imgAR_real) * fc;
 
-    /* Fish F — small orange, 2 cycles, between B and C */
+    /* Fish F — small orange */
     float fxF = 0.828 + sin(t*TAU*2.0 + 0.70) * 0.027;
     float fyF = 0.415 + sin(t*TAU*2.0 + 5.80) * 0.007;
     float fF  = fish(p, vec2(fxF,fyF), sign(cos(t*TAU*2.0+0.70)),
-                     0.002, sin(t*TAU*4.0+0.70)*0.20, AR) * fc;
+                     0.0035, sin(t*TAU*4.0+0.70)*0.20, imgAR_real) * fc;
 
     col.rgb = mix(col.rgb, vec3(0.65, 0.80, 0.95), fD * 0.82);
     col.rgb = mix(col.rgb, vec3(1.00, 0.72, 0.12), fE * 0.88);
@@ -560,7 +555,7 @@
       window.onYouTubeIframeAPIReady = function () {
         player = new YT.Player('yt-frame', {
           videoId: VID,
-          playerVars: { autoplay: 0, controls: 0, loop: 1, playlist: VID, mute: 0 },
+          playerVars: { autoplay: 1, controls: 0, loop: 1, playlist: VID, mute: 0, origin: window.location.origin },
           events: {
             onReady: () => { ready = true; tryPlay(); },
             onStateChange: (e) => {
