@@ -161,7 +161,74 @@ every stage, zero console errors):
   → fullscreen OS-boot transition, and clicking the OS-boot placeholder resets cleanly
   back to the normal scene. Zero console/page errors throughout.
 
+### 2026-07-19 (cont'd) — terminal feedback round
+
+User feedback on the first terminal build, all addressed:
+
+1. **Centering was off.** Original `SCREEN_RECT` was a rough eyeball inset. Redid the
+   pixel measurement properly: took the *median* of first/last dark pixel across ~100
+   scanlines each direction (not min/max, which were skewed by the curved bezel and a
+   reflection streak) — true edges: left 298, right 1677, top 89, bottom 794. New
+   `SCREEN_RECT = {left:393, top:154, right:1582, bottom:729}` insets symmetrically from
+   those medians so the box's centroid exactly matches the screen's true centroid.
+2. **Added a "warp to fullscreen" animation.** After the glitch, the terminal element
+   itself now animates (CSS transition on `left/top/width/height`) from its
+   screen-aligned rect to `0/0/100vw/100vh` over 700ms (`.expanding` class) before
+   `#os-boot` cross-fades on top — sells "the screen taking over the viewport" instead
+   of an abrupt cut. Font-size uses `clamp(...vw...)` so the terminal text visibly grows
+   during the expand, reinforcing the effect.
+3. **Music now stops on fullscreen.** Added `window.DevSanctuaryMusic = {pause, play,
+   isPlaying}` bridge exposed from the YouTube script block. `runUnlockSequence()` reads
+   `isPlaying()` and calls `pause()` right as `#os-boot` becomes visible; `isPlaying()`'s
+   value is cached at that moment so `deactivateTerminal()`'s reset only auto-resumes
+   music if it was actually playing when we paused it — never overrides a pause the user
+   chose manually.
+4. Ran `/fewer-permission-prompts` — only one transcript exists so far (thin signal).
+   Added `Bash(curl -sf http://localhost:*)` to `.claude/settings.json`; everything else
+   recurring was either already auto-allowed by Claude Code (git status/log/diff, ls,
+   cat, echo, find, sort, test, ...) or correctly gated (python/node one-liners — can't
+   safely wildcard arbitrary code execution; git add/commit, pip install, taskkill —
+   all mutating). Revisit after more sessions accumulate.
+
+Verified live again with Playwright: measured the terminal's actual bounding rect via
+`getBoundingClientRect()` against the screen bounds (now symmetric), watched the
+expand-to-fullscreen transition frame-by-frame, and confirmed reset still works
+cleanly. Zero console errors.
+
+### Mobile — open design problem, not yet solved
+
+Flagged as important, not yet implemented. The core issue: `positionTerminal()`'s cover-fit
+formula is generically correct for any aspect ratio, but "cover" itself breaks down hard on
+a narrow **portrait** phone. `monitorclose.png` is 2002×1091 (AR 1.835); a portrait phone
+(AR ≈ 0.46) covering that image only shows a horizontal sliver — displayed-width fraction
+= scrAR/imgAR ≈ 0.46/1.835 ≈ 25%. The measured screen rect spans 63% of the image's width
+(1582−393=1189 of 2002px), so on a phone in portrait, "cover" would crop most of the
+screen/terminal off-screen or squeeze it unusably.
+
+Options considered (not yet decided/built):
+- **Lock/prompt landscape** for the warped-in + terminal experience on mobile — simplest,
+  but adds friction (rotate-device prompt) and doesn't fit a phone-first audience.
+- **Switch cover→contain for narrow viewports** specifically once warped — full monitor
+  always visible (letterboxed top/bottom), terminal rect recomputed against the letterboxed
+  area instead of raw viewport. Keeps one code path, no separate mobile asset.
+- **Separate mobile crop/asset** tuned tighter around just the screen for narrow AR, so less
+  width is "wasted" on desk/bookshelf that cover-fit would otherwise crop away first.
+- **Decouple entirely on mobile**: skip pixel-perfect alignment to the monitor photo below
+  some viewport-width threshold; show the terminal as its own simple fullscreen sheet the
+  moment the monitor is tapped, sacrificing visual continuity for reliability.
+
+Also relevant for mobile regardless of which option: the hidden `<input>` needs the
+on-screen keyboard to not cover the terminal (consider `visualViewport` resize listening
+to reposition/keep the prompt line visible above the keyboard), `touch-action: none` +
+viewport `maximum-scale=1` to stop accidental pinch-zoom breaking the fixed layout, and
+verifying the tap-to-focus flow (terminal's own `click` listener calling `termInput.focus()`)
+actually raises the keyboard reliably on iOS Safari (focus must happen synchronously in
+the gesture handler — currently does, via the click listener — should work, not yet
+tested on a real device/emulated touch input).
+
 ### Next up
+- **Decide the mobile approach** (see above) before or alongside building the OS desktop,
+  since the desktop shell will inherit whatever the terminal's mobile strategy is.
 - **The actual OS desktop is the big remaining piece** — `#os-boot` is currently just a
   placeholder ("booting desktop environment…"); it needs to become a real fake-desktop
   UI (custom OS-style cursor, icons/windows) that IS the portfolio content.

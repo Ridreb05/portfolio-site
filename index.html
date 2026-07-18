@@ -184,6 +184,16 @@
       animation: term-glitch 0.5s steps(2) 3;
     }
 
+    /* "warp to fullscreen" — the terminal's own box expands edge-to-edge right
+       after the glitch, selling the sense of the screen taking over the viewport
+       before the OS-boot placeholder cross-fades on top. */
+    #terminal.expanding {
+      transition: left 0.7s cubic-bezier(.65, 0, .35, 1),
+        top 0.7s cubic-bezier(.65, 0, .35, 1),
+        width 0.7s cubic-bezier(.65, 0, .35, 1),
+        height 0.7s cubic-bezier(.65, 0, .35, 1);
+    }
+
     @keyframes term-glitch {
       0% {
         transform: translate(0, 0);
@@ -870,10 +880,12 @@
       const osBoot     = document.getElementById('os-boot');
 
       const CLOSE_IMG_W = 2002, CLOSE_IMG_H = 1091;
-      /* Measured (pixel-analysis) bounding box of the blank screen in
-         monitorclose.png, inset a safe margin from the true edges to clear
-         the curved-monitor bezel and a faint reflection streak near the edges. */
-      const SCREEN_RECT = { left: 340, top: 150, right: 1610, bottom: 760 };
+      /* Screen rect in monitorclose.png, found via median-of-many-scanlines pixel
+         analysis (true edges: left 298 / right 1677 / top 89 / bottom 794 — noisy
+         due to the curved bezel + a faint reflection streak). Inset symmetrically
+         from those medians (same margin on opposing sides) so this rect's centroid
+         exactly matches the screen's true centroid — keeps the terminal centered. */
+      const SCREEN_RECT = { left: 393, top: 154, right: 1582, bottom: 729 };
 
       function positionTerminal() {
         const scrW = window.innerWidth, scrH = window.innerHeight;
@@ -899,6 +911,7 @@
 
       let terminalActive = false;
       let unlocked = false;
+      let musicWasPlaying = false;
 
       function termPrintLine(text, cls) {
         const line = document.createElement('div');
@@ -921,14 +934,21 @@
       function deactivateTerminal() {
         if (!terminalActive) return;
         terminalActive = false;
-        terminal.classList.remove('active', 'glitching');
+        // Only auto-resume music if we were the ones who paused it for the
+        // OS-boot takeover — never override a pause the user chose themselves.
+        if (unlocked && musicWasPlaying && window.DevSanctuaryMusic) {
+          window.DevSanctuaryMusic.play();
+        }
+        terminal.classList.remove('active', 'glitching', 'expanding');
         terminal.style.pointerEvents = '';
+        terminal.style.left = terminal.style.top = terminal.style.width = terminal.style.height = '';
         termInput.blur();
         termInput.value = '';
         termTyped.textContent = '';
         termOutput.innerHTML = '';
         unlocked = false;
         osBoot.classList.remove('show');
+        positionTerminal(); // restore normal screen-aligned geometry for next time
       }
 
       terminal.addEventListener('click', e => {
@@ -959,6 +979,7 @@
         unlocked = true;
         termInput.blur();
         terminal.style.pointerEvents = 'none';
+
         const bootLines = [
           'authenticating root...',
           'access granted.',
@@ -967,13 +988,35 @@
         bootLines.forEach((line, i) => {
           setTimeout(() => termPrintLine(line, 'ok'), 350 * (i + 1));
         });
+
+        const glitchStart = 350 * (bootLines.length + 1); // after boot lines finish
+        const glitchDur    = 1500;                         // matches 0.5s steps(2) x3
+        const expandDur    = 700;
+
+        // 1. glitch in place
+        setTimeout(() => terminal.classList.add('glitching'), glitchStart);
+
+        // 2. "warp to fullscreen" — the terminal box itself expands edge-to-edge
         setTimeout(() => {
-          terminal.classList.add('glitching');
-        }, 350 * (bootLines.length + 1));
+          terminal.classList.remove('glitching');
+          terminal.classList.add('expanding');
+          terminal.style.left = '0px';
+          terminal.style.top = '0px';
+          terminal.style.width = '100vw';
+          terminal.style.height = '100vh';
+        }, glitchStart + glitchDur);
+
+        // 3. once fullscreen, cross-fade in the OS-boot placeholder and cut the room music
         setTimeout(() => {
-          terminal.classList.remove('active', 'glitching');
+          musicWasPlaying = window.DevSanctuaryMusic ? window.DevSanctuaryMusic.isPlaying() : false;
+          if (window.DevSanctuaryMusic) window.DevSanctuaryMusic.pause();
           osBoot.classList.add('show');
-        }, 350 * (bootLines.length + 1) + 650);
+        }, glitchStart + glitchDur + expandDur);
+
+        // 4. os-boot is fully opaque by now — retire the terminal underneath it
+        setTimeout(() => {
+          terminal.classList.remove('active', 'expanding');
+        }, glitchStart + glitchDur + expandDur + 400);
       }
 
       osBoot.addEventListener('click', () => {
@@ -1172,6 +1215,15 @@
           player.playVideo();
         }
       });
+
+      /* Small bridge so the terminal/OS-boot sequence (a separate script block)
+         can pause the room music once the scene goes fullscreen, and restore it
+         on exit without overriding a pause the user chose themselves. */
+      window.DevSanctuaryMusic = {
+        pause() { if (ready && playing) player.pauseVideo(); },
+        play() { if (ready && !playing) player.playVideo(); },
+        isPlaying() { return playing; }
+      };
     })();
   </script>
 </body>
