@@ -65,17 +65,16 @@ The site should become a portfolio disguised as a "hack into the OS" experience:
 
 ## Known issues / bugs (found in review, 2026-07-19)
 
-1. **Mobile tap-to-warp likely broken.** `hoverMonitor` is derived from `mouseCurrent`,
-   which only updates on `mousemove`/`touchmove` (index.html, mouse tracking block).
-   There's no `touchstart` handler that records tap position — it only sets
-   `uniforms.uIsTouch.value = 1.0`. A plain tap (no drag) fires `click` while
-   `mouseCurrent` is still stale (often screen center), so `hoverMonitor` is false and
-   the warp never triggers. Needs a `touchstart` listener that also sets `mouseTarget`
-   from the touch position.
-2. **No WebGL / load-failure fallback.** `new THREE.WebGLRenderer(...)` isn't wrapped in
-   try/catch; no feature detection, no `<noscript>`. If WebGL is unavailable or three.js
-   fails to load, visitor gets a black screen + spinner forever, `cursor: none`, no
-   error message.
+1. ~~**Mobile tap-to-warp likely broken.**~~ **FIXED 2026-07-19.** `touchstart` now
+   snaps `mouseTarget`/`mouseCurrent` to the tap position and calls a shared
+   `updateHoverMonitor()` synchronously (extracted from `tick()`), so a bare tap is
+   recognized before the `click` handler runs, no lerp/rAF delay.
+2. ~~**No WebGL / load-failure fallback.**~~ **FIXED 2026-07-19.** `#fallback` overlay
+   added; `renderer` creation wrapped in try/catch, checks `renderer.getContext()`,
+   checks `typeof THREE === 'undefined'`, and hero.png load failure all route to
+   `showFallback()` (hides canvas, restores cursor, shows a message + mailto link).
+   monitor.png/monitorclose.png failures still degrade silently since the warp is
+   optional, not the core scene.
 3. **Large, sequential image loads.** `hero.png` (5.6MB) → `monitor.png` (290KB) →
    `monitorclose.png` (1.4MB) load one after another before the loading screen fades:
    >7MB before first paint. Should compress/resize (WebP, downscale to actual display
@@ -104,5 +103,70 @@ The site should become a portfolio disguised as a "hack into the OS" experience:
   perf, a11y, missing content). Findings captured above.
 - User shared the vision: monitorclose.png → terminal overlay → `unlock --root` →
   animation → fullscreen OS-style portfolio desktop. Recorded above as the roadmap.
+- Fixed the mobile tap-to-warp bug and added a WebGL/load-failure fallback (see
+  Known issues #1/#2, both marked FIXED).
+- Verified with a Playwright smoke test (installed headless Chromium via
+  `pip install playwright` + `playwright install chromium`, since no Node/npm is
+  available in this environment — python -m http.server used as the static server
+  instead of serve.ps1 for the automated test only): scene renders correctly (fish,
+  aquarium, dog, monitor all visible), zero console/page errors, and clicking the
+  monitor region successfully warps in to `monitorclose.png`'s blank screen — this is
+  the surface the terminal overlay needs to be built on top of.
+- Committed as `d4de819`: the warp feature, both bug fixes, `monitor.png` and
+  `monitorclose.png` (now tracked), and this DEVLOG.md.
+- `monitorcloseup.png` remains untracked and unused — left alone (not deleted) per
+  "prefer reversible over destructive"; still needs a decision (wire in or remove).
 - Not yet started: terminal overlay, unlock animation, OS desktop shell, actual
   portfolio content.
+
+### 2026-07-19 (cont'd) — Terminal built
+
+Built the terminal overlay end-to-end and verified it live (Playwright, screenshots of
+every stage, zero console errors):
+
+- **Screen-rect math solved analytically, not just eyeballed.** Confirmed via the
+  fragment shader source that at full warp (`uWarpProgress` → 1) `uCloseTex` is sampled
+  with `uvClose = mix((uv-0.5)*1.1+0.5, uv, uWarpProgress)`, which collapses to exactly
+  `uv` (the plain cover-fit coordinate) once `uWarpProgress = 1` — the 0.28/0.53/0.35
+  "zoom to monitor" (`uvBase`) only ever affects `uTex`/`uMonitorTex` sampling, never
+  `uCloseTex`. Confirmed `hero.png`/`monitor.png` (2814×1536, AR 1.832) and
+  `monitorclose.png` (2002×1091, AR 1.835) share the same aspect ratio, so at full warp
+  the close-up is shown with **plain CSS `background-size:cover` behavior** relative to
+  its own pixel dimensions — no perspective/rotation, no mouse/pan dependency (pan is
+  zeroed at `uWarpProgress = 1`). This meant the DOM overlay position could be computed
+  with a plain cover-fit formula (`positionTerminal()` in index.html) instead of needing
+  to reverse-engineer the shader's full transform chain.
+- **Measured the screen's pixel rect** in `monitorclose.png` with a small Python/PIL
+  script (threshold-scanning for near-black pixels, restricted to the monitor region to
+  avoid other dark objects in the shot). True edges: left≈298, right≈1663–1677, top
+  noisy 80–106 (a faint reflection streak crosses the screen), bottom≈792–806. Used a
+  safely-inset rect `{left:340, top:150, right:1610, bottom:760}` (in the 2002×1091
+  source) to clear the curved bezel and the streak — see `SCREEN_RECT` in index.html.
+- **Built:** `#terminal` (monospace, scanline overlay, blinking cursor block, real
+  hidden `<input>` overlaying the whole box so mobile gets a native keyboard), a fake
+  shell (`guest@dev-sanctuary:~$`, unknown commands print `command not found: X`),
+  `unlock --root` as the one working command, a boot-line sequence + CSS glitch
+  keyframe, and `#os-boot` — a fullscreen placeholder ("DEV-SANCTUARY OS / booting
+  desktop environment…") that stands in for the real desktop shell.
+- **Wired to warp state**, not to clicks directly: `tick()` calls
+  `activateTerminal()`/`deactivateTerminal()` on `uWarpProgress` crossing 0.92 (show) /
+  0.5 (hide), with hysteresis so it doesn't flicker mid-animation. Exiting warp (click
+  outside the terminal, or Escape — added an Escape-to-exit-warp handler too) fully
+  resets terminal/boot state, so the flow is repeatable without a page reload.
+- Terminal clicks call `e.stopPropagation()` (same pattern as the music button) so
+  focusing the input doesn't bubble up and trigger the window's click-to-exit-warp
+  handler.
+- Verified: scene renders, warp-in aligns the terminal precisely inside the screen
+  bezel, bad commands show the error line, `unlock --root` runs the full boot → glitch
+  → fullscreen OS-boot transition, and clicking the OS-boot placeholder resets cleanly
+  back to the normal scene. Zero console/page errors throughout.
+
+### Next up
+- **The actual OS desktop is the big remaining piece** — `#os-boot` is currently just a
+  placeholder ("booting desktop environment…"); it needs to become a real fake-desktop
+  UI (custom OS-style cursor, icons/windows) that IS the portfolio content.
+- No real portfolio content exists yet (bio, projects, resume, contact) — this still
+  needs to be authored, presumably as "apps"/"files" in the desktop shell.
+- Minor polish candidates carried over from the first review, still open: compress
+  `hero.png`/`monitorclose.png` (large), decide fate of unused `monitorcloseup.png`,
+  add SEO/meta tags, accessibility pass.

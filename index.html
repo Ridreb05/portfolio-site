@@ -142,6 +142,209 @@
     #fallback a {
       color: #00f2ff;
     }
+
+    /* ── Terminal overlay — sits over the blank screen in monitorclose.png,
+       only visible/interactive once fully warped in ─────────────────── */
+    #terminal {
+      position: fixed;
+      z-index: 40;
+      background: #050506;
+      border: 1px solid rgba(0, 242, 255, 0.25);
+      box-shadow: 0 0 40px rgba(0, 242, 255, 0.08), inset 0 0 60px rgba(0, 242, 255, 0.05);
+      padding: 1.4em 1.6em;
+      font-family: "Courier New", ui-monospace, SFMono-Regular, monospace;
+      font-size: clamp(11px, 1.5vw, 17px);
+      color: #4dffb8;
+      overflow: hidden;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.5s ease;
+      cursor: text;
+    }
+
+    #terminal.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    #terminal::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(0deg,
+          rgba(255, 255, 255, 0.035) 0px,
+          rgba(255, 255, 255, 0.035) 1px,
+          transparent 2px,
+          transparent 3px);
+      mix-blend-mode: overlay;
+      pointer-events: none;
+    }
+
+    #terminal.glitching {
+      animation: term-glitch 0.5s steps(2) 3;
+    }
+
+    @keyframes term-glitch {
+      0% {
+        transform: translate(0, 0);
+        filter: none;
+      }
+
+      20% {
+        transform: translate(-4px, 2px);
+        filter: hue-rotate(60deg);
+      }
+
+      40% {
+        transform: translate(3px, -2px);
+        filter: hue-rotate(-40deg) contrast(1.4);
+      }
+
+      60% {
+        transform: translate(-3px, 1px);
+        filter: invert(0.1);
+      }
+
+      80% {
+        transform: translate(2px, -1px);
+        filter: none;
+      }
+
+      100% {
+        transform: translate(0, 0);
+        filter: none;
+      }
+    }
+
+    #term-body {
+      position: relative;
+      height: 100%;
+      overflow-y: auto;
+      scrollbar-width: none;
+    }
+
+    #term-body::-webkit-scrollbar {
+      display: none;
+    }
+
+    #term-output div {
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.5;
+      opacity: 0.9;
+    }
+
+    #term-output div.error {
+      color: #ff5f6d;
+    }
+
+    #term-output div.ok {
+      color: #4dffb8;
+    }
+
+    #term-line {
+      display: flex;
+      gap: 0.5ch;
+      line-height: 1.5;
+    }
+
+    .term-prompt {
+      color: #00f2ff;
+      white-space: nowrap;
+    }
+
+    #term-cursor {
+      display: inline-block;
+      width: 0.55em;
+      height: 1.1em;
+      background: #4dffb8;
+      animation: term-blink 1s steps(1) infinite;
+      transform: translateY(0.15em);
+    }
+
+    @keyframes term-blink {
+
+      0%,
+      49% {
+        opacity: 1;
+      }
+
+      50%,
+      100% {
+        opacity: 0;
+      }
+    }
+
+    #term-input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      border: 0;
+      padding: 0;
+      margin: 0;
+      background: transparent;
+      color: transparent;
+      caret-color: transparent;
+    }
+
+    /* ── OS boot placeholder — full takeover once "unlock --root" runs ──
+       Stub for the eventual desktop shell; see DEVLOG.md roadmap.        */
+    #os-boot {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.9rem;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.6s ease;
+      color: #4dffb8;
+      font-family: "Courier New", ui-monospace, monospace;
+      text-align: center;
+      cursor: default;
+    }
+
+    #os-boot.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    #os-boot h1 {
+      font-size: 1.6rem;
+      letter-spacing: 0.1em;
+      color: #00f2ff;
+    }
+
+    #os-boot .bar {
+      width: min(320px, 60vw);
+      height: 3px;
+      background: rgba(255, 255, 255, 0.1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    #os-boot .bar::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      width: 40%;
+      background: #00f2ff;
+      animation: os-load 1.2s ease-in-out infinite;
+    }
+
+    @keyframes os-load {
+      0% {
+        transform: translateX(-100%);
+      }
+
+      100% {
+        transform: translateX(350%);
+      }
+    }
   </style>
 </head>
 
@@ -162,6 +365,21 @@
         <a href="mailto:ridreb05@gmail.com">ridreb05@gmail.com</a>.
       </p>
     </div>
+  </div>
+  <div id="terminal">
+    <div id="term-body">
+      <div id="term-output"></div>
+      <div id="term-line">
+        <span class="term-prompt">guest@dev-sanctuary:~$</span>
+        <span id="term-typed"></span><span id="term-cursor"></span>
+      </div>
+    </div>
+    <input id="term-input" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+  </div>
+  <div id="os-boot">
+    <h1>DEV-SANCTUARY OS</h1>
+    <div class="bar"></div>
+    <p>booting desktop environment&hellip;</p>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -633,6 +851,135 @@
         }
       });
 
+      window.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && isWarped) isWarped = false;
+      });
+
+      /* ─── Terminal overlay ────────────────────────────────────────────
+         At full warp the shader shows monitorclose.png with plain cover-fit
+         (see DEVLOG.md — uCloseTex is sampled with the same cover-fit uv as
+         hero.png, and both images share ~the same aspect ratio), so the
+         on-screen position of any pixel rect inside monitorclose.png can be
+         computed with the standard CSS background-size:cover formula below,
+         independent of mouse/pan (pan is zeroed once uWarpProgress reaches 1). */
+      const terminal   = document.getElementById('terminal');
+      const termBody   = document.getElementById('term-body');
+      const termOutput = document.getElementById('term-output');
+      const termTyped  = document.getElementById('term-typed');
+      const termInput  = document.getElementById('term-input');
+      const osBoot     = document.getElementById('os-boot');
+
+      const CLOSE_IMG_W = 2002, CLOSE_IMG_H = 1091;
+      /* Measured (pixel-analysis) bounding box of the blank screen in
+         monitorclose.png, inset a safe margin from the true edges to clear
+         the curved-monitor bezel and a faint reflection streak near the edges. */
+      const SCREEN_RECT = { left: 340, top: 150, right: 1610, bottom: 760 };
+
+      function positionTerminal() {
+        const scrW = window.innerWidth, scrH = window.innerHeight;
+        const imgAR = CLOSE_IMG_W / CLOSE_IMG_H;
+        const scrAR = scrW / scrH;
+        let scale, offX, offY;
+        if (scrAR > imgAR) {
+          scale = scrW / CLOSE_IMG_W;
+          offX = 0;
+          offY = (scrH - CLOSE_IMG_H * scale) / 2;
+        } else {
+          scale = scrH / CLOSE_IMG_H;
+          offY = 0;
+          offX = (scrW - CLOSE_IMG_W * scale) / 2;
+        }
+        terminal.style.left   = (offX + SCREEN_RECT.left   * scale) + 'px';
+        terminal.style.top    = (offY + SCREEN_RECT.top    * scale) + 'px';
+        terminal.style.width  = ((SCREEN_RECT.right - SCREEN_RECT.left) * scale) + 'px';
+        terminal.style.height = ((SCREEN_RECT.bottom - SCREEN_RECT.top) * scale) + 'px';
+      }
+      window.addEventListener('resize', positionTerminal, { passive: true });
+      positionTerminal();
+
+      let terminalActive = false;
+      let unlocked = false;
+
+      function termPrintLine(text, cls) {
+        const line = document.createElement('div');
+        if (cls) line.className = cls;
+        line.textContent = text;
+        termOutput.appendChild(line);
+        termBody.scrollTop = 1e9;
+      }
+
+      function activateTerminal() {
+        if (terminalActive) return;
+        terminalActive = true;
+        terminal.classList.add('active');
+        termPrintLine('DEV-SANCTUARY TERMINAL v1.0');
+        termPrintLine('type `unlock --root` to continue.');
+        termPrintLine('');
+        if (!uniforms.uIsTouch.value) termInput.focus();
+      }
+
+      function deactivateTerminal() {
+        if (!terminalActive) return;
+        terminalActive = false;
+        terminal.classList.remove('active', 'glitching');
+        terminal.style.pointerEvents = '';
+        termInput.blur();
+        termInput.value = '';
+        termTyped.textContent = '';
+        termOutput.innerHTML = '';
+        unlocked = false;
+        osBoot.classList.remove('show');
+      }
+
+      terminal.addEventListener('click', e => {
+        e.stopPropagation();
+        termInput.focus();
+      });
+
+      termInput.addEventListener('input', () => {
+        termTyped.textContent = termInput.value;
+      });
+
+      termInput.addEventListener('keydown', e => {
+        if (e.key !== 'Enter') return;
+        const cmd = termInput.value.trim();
+        termPrintLine('guest@dev-sanctuary:~$ ' + cmd);
+        termInput.value = '';
+        termTyped.textContent = '';
+        if (!cmd) return;
+        if (cmd.toLowerCase() === 'unlock --root') {
+          runUnlockSequence();
+        } else {
+          termPrintLine(`command not found: ${cmd.split(' ')[0]}`, 'error');
+        }
+      });
+
+      function runUnlockSequence() {
+        if (unlocked) return;
+        unlocked = true;
+        termInput.blur();
+        terminal.style.pointerEvents = 'none';
+        const bootLines = [
+          'authenticating root...',
+          'access granted.',
+          'booting Dev-Sanctuary OS...'
+        ];
+        bootLines.forEach((line, i) => {
+          setTimeout(() => termPrintLine(line, 'ok'), 350 * (i + 1));
+        });
+        setTimeout(() => {
+          terminal.classList.add('glitching');
+        }, 350 * (bootLines.length + 1));
+        setTimeout(() => {
+          terminal.classList.remove('active', 'glitching');
+          osBoot.classList.add('show');
+        }, 350 * (bootLines.length + 1) + 650);
+      }
+
+      osBoot.addEventListener('click', () => {
+        isWarped = false;
+      });
+
       const mat = new THREE.ShaderMaterial({
         uniforms,
         vertexShader: VERT,
@@ -697,6 +1044,11 @@
         // Animate the warp progress
         const targetWarp = isWarped ? 1.0 : 0.0;
         uniforms.uWarpProgress.value += (targetWarp - uniforms.uWarpProgress.value) * 0.18;
+
+        // Terminal fades in once nearly fully warped in; hysteresis (0.92 vs 0.5)
+        // avoids flicker while uWarpProgress is animating past either threshold.
+        if (uniforms.uWarpProgress.value > 0.92) activateTerminal();
+        else if (uniforms.uWarpProgress.value < 0.5) deactivateTerminal();
 
         uniforms.uLoop.value = (elapsed % LOOP) / LOOP;
         uniforms.uTime.value = elapsed;
