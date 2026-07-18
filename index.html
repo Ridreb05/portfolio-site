@@ -107,6 +107,41 @@
       left: -9999px;
       pointer-events: none;
     }
+
+    #fallback {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: #06060a;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 2rem;
+      color: rgba(255, 255, 255, 0.85);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    #fallback.show {
+      display: flex;
+    }
+
+    #fallback h1 {
+      font-size: 1.3rem;
+      font-weight: 600;
+      margin-bottom: 0.6rem;
+      color: #00f2ff;
+    }
+
+    #fallback p {
+      max-width: 32rem;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    #fallback a {
+      color: #00f2ff;
+    }
   </style>
 </head>
 
@@ -118,6 +153,16 @@
   <canvas id="c"></canvas>
   <button id="music-btn" title="Toggle music">&#9834;</button>
   <div id="yt-frame"></div>
+  <div id="fallback">
+    <div>
+      <h1>This experience needs WebGL</h1>
+      <p>
+        Your browser or device couldn't start the interactive scene. Try a recent
+        version of Chrome, Firefox, or Safari — or reach out directly at
+        <a href="mailto:ridreb05@gmail.com">ridreb05@gmail.com</a>.
+      </p>
+    </div>
+  </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script>
@@ -140,6 +185,10 @@
   #define PI  3.14159265359
 
   uniform sampler2D uTex;
+  uniform sampler2D uMonitorTex;
+  uniform sampler2D uCloseTex;
+  uniform float     uMonitorHover;
+  uniform float     uWarpProgress;
   uniform vec2      uRes;
   uniform vec2      uImgRes;
   uniform float     uLoop;  /* 0..1, perfectly periodic for looping fx */
@@ -212,7 +261,7 @@
     
     /* Stronger pan for mobile to see both sides of the room */
     float panRange = (scrAR < 1.1) ? 1.0 : 0.4; 
-    float pan = (uMouse.x - 0.5) * panRange; 
+    float pan = (uMouse.x - 0.5) * panRange * (1.0 - uWarpProgress); 
     
     if(scrAR > imgAR){
       float s = imgAR/scrAR;
@@ -223,8 +272,15 @@
       uv.x = (vUv.x-0.5)*s+0.5 + pan * (1.0 - s);
     }
 
+    // Smooth cinematic zoom and shift centered on the monitor screen
+    vec2 targetCenter = vec2(0.28, 0.53);
+    float targetScale = 0.35;
+    vec2 currentCenter = mix(vec2(0.5, 0.5), targetCenter, uWarpProgress);
+    float currentScale = mix(1.0, targetScale, uWarpProgress);
+    vec2 uvBase = (uv - vec2(0.5, 0.5)) * currentScale + currentCenter; 
+
     /* 2. image-space coords: p.y=0 at top */
-    vec2 p = vec2(uv.x, 1.0-uv.y);
+    vec2 p = vec2(uvBase.x, 1.0-uvBase.y);
     float t = uLoop; /* 0..1 */
 
     /* ─── REGION MASKS (tuned to the actual image) ───────────────
@@ -248,7 +304,7 @@
     float dogMk    = box(p, vec4(0.40, 0.62, 0.78, 0.98), 0.04);
 
     /* ─── WATER RIPPLE — only inner water, glass frame untouched ── */
-    vec2 sampUv = uv;
+    vec2 sampUv = uvBase;
     if(aqInner > 0.001){
       /* Very small amplitude so it reads as water, not glass distortion */
       float rx = sin(p.y*32.0 + t*TAU      )*0.00045
@@ -275,6 +331,10 @@
 
     /* ─── SAMPLE BASE IMAGE ──────────────────────────────────────── */
     vec4 col = texture2D(uTex, sampUv);
+    if (uWarpProgress > 0.001) {
+      vec4 colMon = texture2D(uMonitorTex, sampUv);
+      col = mix(col, colMon, uWarpProgress);
+    }
 
     /* ─── ANIMATED WATER REFLECTION ON FLOOR ─────────────────────────
        Two crossing sine-wave sets simulate moving water-light bands.
@@ -409,6 +469,30 @@
     float flick  = 0.009 * sin(t*TAU*5.0);
     col.rgb += (scanBd+flick) * vec3(0.35, 1.0, 0.5) * monMask;
 
+    /* ─── MONITOR HOVER GLOW ───────────────────────────────────── */
+    if (uMonitorHover > 0.001) {
+      vec4 monCol = texture2D(uMonitorTex, sampUv);
+      
+      // Blend the monitor texture pixels on top
+      col.rgb = mix(col.rgb, col.rgb + monCol.rgb * 0.4, monCol.a * uMonitorHover);
+      
+      // Calculate a soft bloom outline glow
+      float glowAlpha = 0.0;
+      float stepSize = 0.0015;
+      for (int x = -2; x <= 2; x++) {
+        for (int y = -2; y <= 2; y++) {
+          if (x != 0 || y != 0) {
+            vec2 offset = vec2(float(x), float(y)) * stepSize;
+            glowAlpha += texture2D(uMonitorTex, sampUv + offset).a;
+          }
+        }
+      }
+      glowAlpha = glowAlpha / 24.0;
+      float outerGlow = clamp(glowAlpha - monCol.a, 0.0, 1.0);
+      vec3 glowColor = vec3(0.0, 0.95, 1.0); // Cyan glow
+      col.rgb += glowColor * outerGlow * 0.7 * uMonitorHover;
+    }
+
     /* ─── GLOBAL AMBIENT SWELL ───────────────────────────────── */
     col.rgb *= 1.0 + 0.018 * sin(t*TAU);
 
@@ -436,6 +520,14 @@
     float vig = uv.x*(1.-uv.x)*uv.y*(1.-uv.y)*14.0;
     col.rgb  *= 0.80 + 0.20*clamp(vig,0.0,1.0);
 
+    /* ─── CLOSE-UP WARP BLEND ────────────────────────────────── */
+    if (uWarpProgress > 0.001) {
+      // Zoom close texture slightly for alignment parallax
+      vec2 uvClose = mix((uv - vec2(0.5)) * 1.1 + vec2(0.5), uv, uWarpProgress);
+      vec4 closeCol = texture2D(uCloseTex, uvClose);
+      col.rgb = mix(col.rgb, closeCol.rgb, uWarpProgress);
+    }
+
     gl_FragColor = vec4(clamp(col.rgb,0.0,1.0), 1.0);
   }
 `;
@@ -444,19 +536,48 @@
     (function () {
       const canvas = document.getElementById('c');
       const loading = document.getElementById('loading');
+      const fallback = document.getElementById('fallback');
 
-      const renderer = new THREE.WebGLRenderer({
-        canvas,
-        antialias: true,
-        powerPreference: 'high-performance'
-      });
+      function showFallback() {
+        loading.style.display = 'none';
+        canvas.style.display = 'none';
+        document.body.style.cursor = 'auto';
+        fallback.classList.add('show');
+      }
+
+      if (typeof THREE === 'undefined') {
+        showFallback();
+        return;
+      }
+
+      let renderer;
+      try {
+        renderer = new THREE.WebGLRenderer({
+          canvas,
+          antialias: true,
+          powerPreference: 'high-performance'
+        });
+      } catch (e) {
+        renderer = null;
+      }
+      if (!renderer || !renderer.getContext()) {
+        showFallback();
+        return;
+      }
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
       const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
       const scene = new THREE.Scene();
 
+      let hoverMonitor = false;
+      let isWarped = false;
+
       const uniforms = {
         uTex: { value: null },
+        uMonitorTex: { value: null },
+        uCloseTex: { value: null },
+        uMonitorHover: { value: 0.0 },
+        uWarpProgress: { value: 0.0 },
         uRes: { value: new THREE.Vector2() },
         uImgRes: { value: new THREE.Vector2(1, 1) },
         uLoop: { value: 0 },
@@ -470,7 +591,7 @@
         uniforms.uIsTouch.value = 1.0;
       }
 
-      const mouseTarget  = new THREE.Vector2(0.5, 0.5);
+      const mouseTarget = new THREE.Vector2(0.5, 0.5);
       const mouseCurrent = new THREE.Vector2(0.5, 0.5);
 
       /* Mouse / touch tracking */
@@ -480,9 +601,21 @@
           1.0 - e.clientY / window.innerHeight
         );
       }, { passive: true });
-      window.addEventListener('touchstart', () => {
+      window.addEventListener('touchstart', e => {
         uniforms.uIsTouch.value = 1.0;
-      }, { once: true });
+        /* Snap (no lerp) so a tap-to-warp on the monitor is recognized
+           immediately — a bare tap never fires touchmove, so waiting
+           on the lerp would leave hoverMonitor stale at the old position. */
+        const t0 = e.touches[0];
+        if (t0) {
+          mouseTarget.set(
+            t0.clientX / window.innerWidth,
+            1.0 - t0.clientY / window.innerHeight
+          );
+          mouseCurrent.copy(mouseTarget);
+          updateHoverMonitor();
+        }
+      }, { passive: true });
       window.addEventListener('touchmove', e => {
         const t0 = e.touches[0];
         mouseTarget.set(
@@ -490,6 +623,15 @@
           1.0 - t0.clientY / window.innerHeight
         );
       }, { passive: true });
+
+      // Click to warp
+      window.addEventListener('click', () => {
+        if (hoverMonitor) {
+          isWarped = !isWarped;
+        } else if (isWarped) {
+          isWarped = false;
+        }
+      });
 
       const mat = new THREE.ShaderMaterial({
         uniforms,
@@ -511,41 +653,111 @@
 
       const clock = new THREE.Clock();
 
+      // Calculate image-space mouse coords from mouseCurrent and refresh hoverMonitor.
+      // Shared by tick() (continuous mouse/drag tracking) and touchstart (so a bare
+      // tap is recognized before the click event, without waiting on a lerp/rAF).
+      function updateHoverMonitor() {
+        const w = window.innerWidth, h = window.innerHeight;
+        const scrAR = w / h;
+        const imgAR = uniforms.uImgRes.value.x / uniforms.uImgRes.value.y;
+
+        let mUvX = mouseCurrent.x;
+        let mUvY = mouseCurrent.y;
+
+        if (scrAR > imgAR) {
+          const s = imgAR / scrAR;
+          mUvY = (mouseCurrent.y - 0.5) * s + 0.5;
+        } else {
+          const s = scrAR / imgAR;
+          const panRange = (scrAR < 1.1) ? 1.0 : 0.4;
+          const pan = (mouseCurrent.x - 0.5) * panRange;
+          mUvX = (mouseCurrent.x - 0.5) * s + 0.5 + pan * (1.0 - s);
+        }
+
+        const mP = { x: mUvX, y: 1.0 - mUvY };
+
+        // Bounding box for monitor hover (covers frame and screen)
+        hoverMonitor = (mP.x >= 0.08 && mP.x <= 0.44 && mP.y >= 0.20 && mP.y <= 0.70);
+        return hoverMonitor;
+      }
+
       function tick() {
         requestAnimationFrame(tick);
         const elapsed = clock.getElapsedTime();
-        
+
         /* Cinematic smoothing: camera drifts to target */
         const lerpFactor = uniforms.uIsTouch.value > 0.5 ? 0.08 : 0.15;
         mouseCurrent.lerp(mouseTarget, lerpFactor);
         uniforms.uMouse.value.copy(mouseCurrent);
-        
+
+        const isHovering = updateHoverMonitor();
+        const targetHover = isHovering ? 1.0 : 0.0;
+        uniforms.uMonitorHover.value += (targetHover - uniforms.uMonitorHover.value) * 0.1;
+
+        // Animate the warp progress
+        const targetWarp = isWarped ? 1.0 : 0.0;
+        uniforms.uWarpProgress.value += (targetWarp - uniforms.uWarpProgress.value) * 0.18;
+
         uniforms.uLoop.value = (elapsed % LOOP) / LOOP;
         uniforms.uTime.value = elapsed;
         renderer.render(scene, camera);
       }
 
-      new THREE.TextureLoader().load(
+      const loader = new THREE.TextureLoader();
+      loader.load(
         'hero.png',
-        (tex) => {
-          tex.minFilter = THREE.LinearFilter;
-          tex.magFilter = THREE.LinearFilter;
-          tex.generateMipmaps = false;
-          uniforms.uTex.value = tex;
+        (texHero) => {
+          texHero.minFilter = THREE.LinearFilter;
+          texHero.magFilter = THREE.LinearFilter;
+          texHero.generateMipmaps = false;
+          uniforms.uTex.value = texHero;
           uniforms.uImgRes.value.set(
-            tex.image.naturalWidth || tex.image.width,
-            tex.image.naturalHeight || tex.image.height
+            texHero.image.naturalWidth || texHero.image.width,
+            texHero.image.naturalHeight || texHero.image.height
           );
-          loading.classList.add('fade');
-          setTimeout(() => loading.style.display = 'none', 950);
-          tick();
+
+          loader.load(
+            'monitor.png',
+            (texMon) => {
+              texMon.minFilter = THREE.LinearFilter;
+              texMon.magFilter = THREE.LinearFilter;
+              texMon.generateMipmaps = false;
+              uniforms.uMonitorTex.value = texMon;
+
+              loader.load(
+                'monitorclose.png',
+                (texClose) => {
+                  texClose.minFilter = THREE.LinearFilter;
+                  texClose.magFilter = THREE.LinearFilter;
+                  texClose.generateMipmaps = false;
+                  uniforms.uCloseTex.value = texClose;
+
+                  loading.classList.add('fade');
+                  setTimeout(() => loading.style.display = 'none', 950);
+                  tick();
+                },
+                undefined,
+                (err) => {
+                  console.error('monitorclose.png load failed:', err);
+                  loading.classList.add('fade');
+                  setTimeout(() => loading.style.display = 'none', 950);
+                  tick();
+                }
+              );
+            },
+            undefined,
+            (err) => {
+              console.error('monitor.png load failed:', err);
+              loading.classList.add('fade');
+              setTimeout(() => loading.style.display = 'none', 950);
+              tick();
+            }
+          );
         },
         undefined,
         (err) => {
           console.error('hero.png load failed:', err);
-          loading.classList.add('fade');
-          setTimeout(() => loading.style.display = 'none', 950);
-          tick();
+          showFallback();
         }
       );
     })();
@@ -556,7 +768,7 @@
   <script>
     (function () {
       const btn = document.getElementById('music-btn');
-      const VID = 'jfKfPfyJRdk';
+      const VID = 'sF80I-TQiW0';
       let player, ready = false, playing = false, started = false;
 
       window.onYouTubeIframeAPIReady = function () {
@@ -564,10 +776,10 @@
           videoId: VID,
           playerVars: { autoplay: 1, controls: 0, loop: 1, playlist: VID, mute: 0, origin: window.location.origin },
           events: {
-            onReady: () => { 
-              ready = true; 
+            onReady: () => {
+              ready = true;
               player.setVolume(100);
-              tryPlay(); 
+              tryPlay();
             },
             onStateChange: (e) => {
               /* Sync our internal state with the actual YouTube player state */
