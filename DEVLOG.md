@@ -195,36 +195,33 @@ Verified live again with Playwright: measured the terminal's actual bounding rec
 expand-to-fullscreen transition frame-by-frame, and confirmed reset still works
 cleanly. Zero console errors.
 
-### Mobile — open design problem, not yet solved
+### Mobile — open design problem, **SOLVED 2026-07-19 (later session)**
 
-Flagged as important, not yet implemented. The core issue: `positionTerminal()`'s cover-fit
-formula is generically correct for any aspect ratio, but "cover" itself breaks down hard on
-a narrow **portrait** phone. `monitorclose.png` is 2002×1091 (AR 1.835); a portrait phone
+Was flagged as important, not yet implemented; now fixed. The core issue: `positionTerminal()`'s
+cover-fit formula is generically correct for any aspect ratio, but "cover" itself breaks down hard
+on a narrow **portrait** phone. `monitorclose.png` is 2002×1091 (AR 1.835); a portrait phone
 (AR ≈ 0.46) covering that image only shows a horizontal sliver — displayed-width fraction
 = scrAR/imgAR ≈ 0.46/1.835 ≈ 25%. The measured screen rect spans 63% of the image's width
-(1582−393=1189 of 2002px), so on a phone in portrait, "cover" would crop most of the
-screen/terminal off-screen or squeeze it unusably.
+(1582−393=1189 of 2002px), so on a phone in portrait, "cover" pushed the terminal box to a
+negative left offset — almost entirely off-screen (confirmed via Playwright screenshot, only a
+sliver of text visible at the left edge).
 
-Options considered (not yet decided/built):
-- **Lock/prompt landscape** for the warped-in + terminal experience on mobile — simplest,
-  but adds friction (rotate-device prompt) and doesn't fit a phone-first audience.
-- **Switch cover→contain for narrow viewports** specifically once warped — full monitor
-  always visible (letterboxed top/bottom), terminal rect recomputed against the letterboxed
-  area instead of raw viewport. Keeps one code path, no separate mobile asset.
-- **Separate mobile crop/asset** tuned tighter around just the screen for narrow AR, so less
-  width is "wasted" on desk/bookshelf that cover-fit would otherwise crop away first.
-- **Decouple entirely on mobile**: skip pixel-perfect alignment to the monitor photo below
-  some viewport-width threshold; show the terminal as its own simple fullscreen sheet the
-  moment the monitor is tapped, sacrificing visual continuity for reliability.
+Options considered — went with **"decouple entirely on mobile"**: for `scrAR < 1.1`,
+`positionTerminal()` now short-circuits to a fixed centered sheet (`left:6% top:16% width:88%
+height:68%`) instead of computing from `SCREEN_RECT`/cover-fit math. Sacrifices being embedded
+pixel-perfectly in the monitor bezel on phones for something actually readable/usable; desktop/
+tablet (`scrAR >= 1.1`) is untouched, still pixel-aligned to the photo.
 
-Also relevant for mobile regardless of which option: the hidden `<input>` needs the
-on-screen keyboard to not cover the terminal (consider `visualViewport` resize listening
-to reposition/keep the prompt line visible above the keyboard), `touch-action: none` +
-viewport `maximum-scale=1` to stop accidental pinch-zoom breaking the fixed layout, and
-verifying the tap-to-focus flow (terminal's own `click` listener calling `termInput.focus()`)
-actually raises the keyboard reliably on iOS Safari (focus must happen synchronously in
-the gesture handler — currently does, via the click listener — should work, not yet
-tested on a real device/emulated touch input).
+The other options (landscape lock, switch cover→contain, separate mobile crop asset) were
+rejected: landscape-lock adds rotate-device friction for a phone-first audience; contain-fit
+would require decoupling `uCloseTex`'s UV from the shared room-scene `uv` in the shader (bigger,
+riskier change) just to letterbox one texture; a separate cropped asset means maintaining two
+images in sync. The decouple approach was the smallest, lowest-risk change that actually solves
+the readability problem.
+
+The on-screen-keyboard-covers-terminal concern is now moot: the terminal no longer has a text
+`<input>` at all (see below, boot menu replaced the typed `unlock --root` command), so there's no
+keyboard to summon or avoid on mobile.
 
 ### 2026-07-19 (cont'd) — architecture split: OS desktop is now a separate app
 
@@ -291,11 +288,65 @@ updated to match ("booting Dreb OS..." / "DREB OS" heading) so the handoff is
 consistent. From here on, **portfolio-os's own README.md is the source of truth for
 that app** — this file only needs to track this repo's own concerns.
 
+### 2026-07-19 (later session) — mobile tap fix, natural drag, terminal → boot menu
+
+User asked for three things on this repo specifically: (1) fix mobile tap-to-warp on the
+monitor, (2) invert the touch-drag pan direction to feel "natural" on mobile, (3) remake
+the terminal as a bootloader. All three done, verified with Playwright at a 390×844 mobile
+viewport and 1280×800 desktop, zero console/page errors throughout.
+
+**1. Mobile tap fix.** Root cause wasn't the tap-to-warp logic itself — a real Chromium
+touchscreen tap (`page.touchscreen.tap`, which goes through the actual touch-input pipeline)
+already triggered the warp correctly even before this session's changes; a naive synthetic
+`dispatchEvent(new TouchEvent(...))` test misleadingly suggested otherwise; it doesn't cause
+the browser to synthesize a real `click`, so it isn't a valid way to test this. The *actual*
+bug was exactly what an earlier session had already flagged and left unfixed (see Mobile
+section above, before this edit): no `touch-action`/`overscroll-behavior` opt-out, so real
+mobile browsers' native gesture recognition (300ms tap-vs-double-tap-zoom delay, drag-vs-tap
+jitter cancellation, rubber-band bounce) could still intercept or cancel the tap before our
+JS ever saw a clean click. Fixed: `touch-action: none` on `html`/`body`/`#c`, `overscroll-
+behavior: none` on `html`/`body`, and `maximum-scale=1.0, user-scalable=no` on the viewport
+meta tag. Verified no regressions: tapping inside the terminal (once warped in) still just
+focuses/interacts with it rather than un-warping (the terminal's own `click` listener still
+`stopPropagation()`s), and tapping the monitor again (or elsewhere) still un-warps correctly.
+
+**2. Natural mobile drag direction.** The room-scene pan on portrait phones is driven by
+`(uMouse.x - 0.5) * panRange` with `panRange = 1.0`, which — combined with the cover-fit
+scale term — algebraically cancels out to an identity: the exact image pixel under your
+finger is what renders under your finger (this is *why* tap-to-warp can be pixel-accurate).
+But it means dragging continuously behaves like "camera chases your finger," so content
+visually slides *opposite* your drag direction (the pre-2011, "traditional" scroll
+convention) — not "natural"/content-follows-finger like native phone scrolling. Fixed by
+changing the `touchmove` handler only: `touchstart` still snaps `mouseTarget` to the
+absolute touch position (unchanged — this is what keeps tap-to-warp accurate), but
+`touchmove` now accumulates the finger's frame-to-frame **delta**, subtracted (X) / added
+(Y, already flip-signed) from `mouseTarget`, instead of overwriting it with the new absolute
+position. Verified via a synthetic rightward drag: the room now pans to reveal the monitor
+(left-side content) as the finger drags right, the inverse of the old behavior. Mouse/
+desktop behavior (absolute position, no delta) is untouched — this was scoped to mobile
+only per the user's ask.
+
+**3. Terminal → GRUB-style boot menu.** Replaced the old "type `unlock --root`" hidden-input
+interaction with an actual boot-menu UI: four entries (Dreb OS / Dreb OS (safe mode) /
+System Diagnostics / Recovery Console), arrow-key navigation that pauses a 5s auto-boot
+countdown on keypress (same convention as real GRUB), Enter or a tap/click to commit. Only
+the first two entries actually boot (safe mode adds one extra "loading minimal drivers..."
+line to the existing boot-log sequence, otherwise identical animation/handoff to
+`portfolio.debanik.com`); Diagnostics/Recovery show fake but on-brand flavor output (hardware
+check lines / recovery-tools-unavailable message) and dead-end back to the menu on Enter or
+tap — mirrors the old terminal's "command not found" for anything but the one real command,
+just menu-driven instead of typed. Removed entirely: `#term-input`, `#term-line`, `#term-
+typed`, `#term-cursor` and their CSS/JS (no more typed text, so no more virtual-keyboard-
+on-mobile problem — see Mobile section above). `activateTerminal()`/`deactivateTerminal()`
+now reset to the fresh boot-menu state each time instead of printing a static welcome
+message.
+
+Also fixed in the course of verifying #3 on mobile: `positionTerminal()`'s pixel-perfect
+cover-fit math was pushing the terminal almost entirely off-screen on portrait phones — a
+pre-existing bug this session's mobile-tap fix finally made reachable/visible in testing.
+See "Mobile — open design problem, SOLVED" above for the fix.
+
 ### Next up
-- **Decide the mobile approach for THIS repo's terminal/warp** (see mobile section
-  above) — separate concern from portfolio-os's own (already-solved) responsive
-  design, since this repo's terminal still only needs to work well enough to reach
-  the "unlock" moment and hand off.
 - Vercel deployment + `portfolio.debanik.com` DNS still need to be wired up on the
   user's end (debanik.com is already on Vercel; portfolio-os needs its own project +
   custom domain there).
