@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Dev Sanctuary</title>
+  <title>Dreb OS</title>
   <style>
     * {
       margin: 0;
@@ -380,7 +380,7 @@
     <div id="term-body">
       <div id="term-output"></div>
       <div id="term-line">
-        <span class="term-prompt">guest@dev-sanctuary:~$</span>
+        <span class="term-prompt">guest@dreb-os:~$</span>
         <span id="term-typed"></span><span id="term-cursor"></span>
       </div>
     </div>
@@ -930,7 +930,7 @@
         if (terminalActive) return;
         terminalActive = true;
         terminal.classList.add('active');
-        termPrintLine('DEV-SANCTUARY TERMINAL v1.0');
+        termPrintLine('DREB OS TERMINAL v1.0');
         termPrintLine('type `unlock --root` to continue.');
         termPrintLine('');
         if (!uniforms.uIsTouch.value) termInput.focus();
@@ -968,7 +968,7 @@
       termInput.addEventListener('keydown', e => {
         if (e.key !== 'Enter') return;
         const cmd = termInput.value.trim();
-        termPrintLine('guest@dev-sanctuary:~$ ' + cmd);
+        termPrintLine('guest@dreb-os:~$ ' + cmd);
         termInput.value = '';
         termTyped.textContent = '';
         if (!cmd) return;
