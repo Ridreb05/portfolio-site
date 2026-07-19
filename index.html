@@ -879,6 +879,11 @@
       const termInput  = document.getElementById('term-input');
       const osBoot     = document.getElementById('os-boot');
 
+      /* The real desktop-OS experience lives in its own independently deployed
+         app (portfolio-os repo), not in this page — os-boot below is just a
+         short local transition before handing off. */
+      const OS_DESKTOP_URL = 'https://portfolio.debanik.com';
+
       const CLOSE_IMG_W = 2002, CLOSE_IMG_H = 1091;
       /* Screen rect in monitorclose.png, found via median-of-many-scanlines pixel
          analysis (true edges: left 298 / right 1677 / top 89 / bottom 794 — noisy
@@ -1017,6 +1022,19 @@
         setTimeout(() => {
           terminal.classList.remove('active', 'expanding');
         }, glitchStart + glitchDur + expandDur + 400);
+
+        // 5. hand off to the real desktop-OS app — a separate, independently
+        // deployed/responsive React app, not part of this page. Skipped on
+        // localhost/file so local testing doesn't get yanked away mid-dev.
+        setTimeout(() => {
+          const host = window.location.hostname;
+          const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '';
+          if (isLocal) {
+            console.log('[dev] would redirect to ' + OS_DESKTOP_URL + ' here (skipped on localhost)');
+          } else {
+            window.location.href = OS_DESKTOP_URL;
+          }
+        }, glitchStart + glitchDur + expandDur + 1400);
       }
 
       osBoot.addEventListener('click', () => {

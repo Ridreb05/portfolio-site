@@ -226,14 +226,70 @@ actually raises the keyboard reliably on iOS Safari (focus must happen synchrono
 the gesture handler — currently does, via the click listener — should work, not yet
 tested on a real device/emulated touch input).
 
+### 2026-07-19 (cont'd) — architecture split: OS desktop is now a separate app
+
+User's ask: once "unlocked," the OS desktop should live at its own URL
+(`portfolio.debanik.com`) so it's shareable on its own, be fully responsive, and run
+independently of this WebGL scene — while still being reachable *through* this scene
+(`debanik.com`) via the terminal easter egg.
+
+Decided (with user, via AskUserQuestion): hosting is Vercel/Netlify, the OS desktop gets
+its **own new repo** (not a folder in this repo), stack is **React + Vite**.
+
+What happened:
+- **New repo/project**: `c:\Users\ridre\Documents\portfolio-os` — see its own README.md
+  for structure. Scaffolded with `npm create vite@latest -- --template react` (Node.js
+  wasn't installed in this environment; installed via `winget install
+  OpenJS.NodeJS.LTS`). Built a real, working desktop shell: boot screen, draggable/
+  closable/maximizable windows (`useDraggable` hook, mouse+touch), a dock, a custom
+  cursor (auto-disabled via `(pointer: fine)` media query, not device-sniffing), and
+  three placeholder apps (About/Projects/Contact — clearly marked, not fabricated real
+  bio/project content). Responsive from the start: windows go fullscreen below 768px
+  instead of floating (dragging tiny windows on a phone is unusable), desktop icons
+  hide while an app is open on mobile, and maximized/fullscreen windows are inset
+  2.6rem from the top so their own controls don't collide with the fixed clock widget
+  (both anchored top-right — this was a real bug, caught by Playwright: the clock
+  intercepted clicks meant for the maximize/close buttons; fixed by reserving a
+  status-bar strip, the same pattern real OSes use).
+- Verified with Playwright at both a desktop viewport (1280x800: multi-window open/
+  drag/maximize/close, all fine after the status-bar fix) and a mobile viewport
+  (390x844, `has_touch`/`is_mobile`: fullscreen windows, icons hidden correctly, dock
+  reachable). Zero console errors both times. `npm run build` succeeds (~62KB gzipped).
+  Git initialized locally, one commit so far, **not yet pushed** — no GitHub remote
+  exists yet (see below).
+- **This repo's terminal now hands off to it.** `runUnlockSequence()` in `index.html`
+  has a 5th step: ~1.4s after `#os-boot` becomes visible, redirect via
+  `window.location.href` to `OS_DESKTOP_URL` (`https://portfolio.debanik.com`) — except
+  on `localhost`/`127.0.0.1`/no-hostname, where it just `console.log`s what it would've
+  done, so local dev testing doesn't get yanked away mid-iteration. Verified via
+  Playwright (checked `framenavigated` events + the console log) that this branch is
+  taken correctly on localhost.
+
+**Blocked on the user for actual deployment** (I don't have accounts/credentials for
+any of this):
+- No GitHub remote exists yet for `portfolio-os`. Tried `gh` CLI (installed it via
+  `winget install GitHub.cli` since it wasn't present) — not authenticated
+  (`gh auth status` → not logged in), and logging in needs an interactive browser flow
+  only the user can complete. **User needs to either**: (a) run `gh auth login` in this
+  environment then say go, and I'll create+push the repo myself, or (b) create an empty
+  repo (suggested name: `portfolio-os`, public, under `Ridreb05` to match
+  `portfolio-site`'s convention) via github.com and give me the remote URL to push to.
+- Vercel/Netlify project creation, and pointing the `portfolio.debanik.com` custom
+  domain at whichever project serves `portfolio-os`, both require the user's own
+  dashboard access — I can't do this part at all, only advise.
+- DNS: `portfolio.debanik.com` needs a CNAME (or A/ALIAS per host's instructions)
+  added wherever `debanik.com`'s DNS is managed. Also the user's own to do.
+
 ### Next up
-- **Decide the mobile approach** (see above) before or alongside building the OS desktop,
-  since the desktop shell will inherit whatever the terminal's mobile strategy is.
-- **The actual OS desktop is the big remaining piece** — `#os-boot` is currently just a
-  placeholder ("booting desktop environment…"); it needs to become a real fake-desktop
-  UI (custom OS-style cursor, icons/windows) that IS the portfolio content.
-- No real portfolio content exists yet (bio, projects, resume, contact) — this still
-  needs to be authored, presumably as "apps"/"files" in the desktop shell.
+- **Get portfolio-os pushed to GitHub + deployed**, per the blockers above — this is
+  the immediate next step, blocked on the user.
+- **Decide the mobile approach for THIS repo's terminal/warp** (see mobile section
+  above) — separate concern from portfolio-os's own (already-solved) responsive
+  design, since this repo's terminal still only needs to work well enough to reach
+  the "unlock" moment and hand off; the real fully-responsive experience is now on
+  the other side of the redirect.
+- Real portfolio content (bio, projects, resume, contact) still needs to be written
+  into `portfolio-os`'s three placeholder apps.
 - Minor polish candidates carried over from the first review, still open: compress
   `hero.png`/`monitorclose.png` (large), decide fate of unused `monitorcloseup.png`,
   add SEO/meta tags, accessibility pass.
