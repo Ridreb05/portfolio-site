@@ -989,20 +989,6 @@
         const imgAR = CLOSE_IMG_W / CLOSE_IMG_H;
         const scrAR = scrW / scrH;
 
-        /* Narrow/portrait phones (see DEVLOG "Mobile -- open design problem"):
-           cover-fit crops monitorclose.png down to a thin vertical sliver, so
-           pixel-perfect alignment to the photo's screen rect would push the
-           terminal mostly off-screen. Decouple entirely instead -- show the
-           terminal as its own centered sheet. Sacrifices being embedded
-           exactly in the monitor bezel for something actually readable. */
-        if (scrAR < 1.1) {
-          terminal.style.left   = '6%';
-          terminal.style.top    = '16%';
-          terminal.style.width  = '88%';
-          terminal.style.height = '68%';
-          return;
-        }
-
         let scale, offX, offY;
         if (scrAR > imgAR) {
           scale = scrW / CLOSE_IMG_W;
@@ -1013,10 +999,31 @@
           offY = 0;
           offX = (scrW - CLOSE_IMG_W * scale) / 2;
         }
-        terminal.style.left   = (offX + SCREEN_RECT.left   * scale) + 'px';
-        terminal.style.top    = (offY + SCREEN_RECT.top    * scale) + 'px';
-        terminal.style.width  = ((SCREEN_RECT.right - SCREEN_RECT.left) * scale) + 'px';
-        terminal.style.height = ((SCREEN_RECT.bottom - SCREEN_RECT.top) * scale) + 'px';
+
+        /* On narrow/portrait phones, cover-fit crops most of monitorclose.png's
+           width off-screen (see DEVLOG "Mobile -- open design problem"), so the
+           raw rect below can extend past the viewport on either side (even go
+           fully negative) — that's the old bug that pushed the terminal off-
+           screen entirely. Since uWarpProgress=1 zeroes the room-pan (see the
+           shader's `pan * (1.0 - uWarpProgress)`), the visible crop is always
+           centered on the image at full warp, so simply clamping this rect to
+           the viewport gives the *exact* pixel bounds of whatever part of the
+           monitor screen is actually visible — no separate narrow-viewport
+           branch or shader change needed. */
+        const rawLeft   = offX + SCREEN_RECT.left   * scale;
+        const rawTop    = offY + SCREEN_RECT.top    * scale;
+        const rawRight  = offX + SCREEN_RECT.right  * scale;
+        const rawBottom = offY + SCREEN_RECT.bottom * scale;
+
+        const left   = Math.max(0, rawLeft);
+        const top    = Math.max(0, rawTop);
+        const right  = Math.min(scrW, rawRight);
+        const bottom = Math.min(scrH, rawBottom);
+
+        terminal.style.left   = left + 'px';
+        terminal.style.top    = top + 'px';
+        terminal.style.width  = Math.max(0, right - left) + 'px';
+        terminal.style.height = Math.max(0, bottom - top) + 'px';
       }
       window.addEventListener('resize', positionTerminal, { passive: true });
       positionTerminal();

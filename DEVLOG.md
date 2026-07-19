@@ -206,18 +206,29 @@ on a narrow **portrait** phone. `monitorclose.png` is 2002×1091 (AR 1.835); a p
 negative left offset — almost entirely off-screen (confirmed via Playwright screenshot, only a
 sliver of text visible at the left edge).
 
-Options considered — went with **"decouple entirely on mobile"**: for `scrAR < 1.1`,
-`positionTerminal()` now short-circuits to a fixed centered sheet (`left:6% top:16% width:88%
-height:68%`) instead of computing from `SCREEN_RECT`/cover-fit math. Sacrifices being embedded
-pixel-perfectly in the monitor bezel on phones for something actually readable/usable; desktop/
-tablet (`scrAR >= 1.1`) is untouched, still pixel-aligned to the photo.
+First attempt went with **"decouple entirely on mobile"**: a fixed centered sheet (`left:6%
+top:16% width:88% height:68%`) instead of computing from `SCREEN_RECT`/cover-fit math. Shipped,
+then the user correctly called out that it visually floated outside the monitor's frame instead
+of looking embedded in it — a fair complaint, since it was a guessed rectangle with no relation
+to what's actually rendered underneath.
 
-The other options (landscape lock, switch cover→contain, separate mobile crop asset) were
-rejected: landscape-lock adds rotate-device friction for a phone-first audience; contain-fit
-would require decoupling `uCloseTex`'s UV from the shared room-scene `uv` in the shader (bigger,
-riskier change) just to letterbox one texture; a separate cropped asset means maintaining two
-images in sync. The decouple approach was the smallest, lowest-risk change that actually solves
-the readability problem.
+**Replaced with the actually-correct fix**: keep the original cover-fit math (still pixel-
+accurate), but **clamp** the resulting rect to the viewport (`Math.max(0, ...)` /
+`Math.min(scrW/scrH, ...)`) instead of leaving it free to go negative/overflowing. This works
+for a subtle but solid reason: at full warp, `uWarpProgress` is 1, and the shader's pan term
+(`pan * (1.0 - uWarpProgress)`) is exactly zero — so the visible crop of `monitorclose.png` is
+*always* centered on the image, with no dependency on prior mouse/touch position. That means
+clamping the naive cover-fit rect to `[0,scrW]×[0,scrH]` gives the *exact* pixel bounds of
+whatever portion of the monitor screen is actually visible, for any aspect ratio, with zero
+guessing and no separate narrow-viewport branch. Worked out on paper first for a 390×844 phone
+(clamped rect comes out full-width, top ~14%/height ~53% of the screen — matches what cover-fit
+crops to a thin, heavily-zoomed-in center strip would actually show) and confirmed via
+Playwright screenshot before considering it done. Desktop/tablet unaffected (the clamp is a
+no-op there — the unclamped rect already falls within the viewport).
+
+The other options from the original list (landscape lock, shader-level contain-fit, separate
+mobile crop asset) are now moot — the clamp fix gets the same correctness as contain-fit would,
+without touching the shader at all.
 
 The on-screen-keyboard-covers-terminal concern is now moot: the terminal no longer has a text
 `<input>` at all (see below, boot menu replaced the typed `unlock --root` command), so there's no
@@ -392,6 +403,26 @@ pipeline, goes through Chrome's actual touch→click synthesis) is what caught t
 earlier test in this same investigation used raw `dispatchEvent(new TouchEvent(...))`, which
 does *not* trigger real click synthesis and does not reproduce real device tap-cancellation
 behavior; don't trust that method for touch-interaction testing again.
+
+### 2026-07-19 (later session, cont'd) — swipe direction re-checked, terminal frame fixed
+
+User reported after the above shipped: still can't tap the monitor, swiping still janky, and
+the boot menu renders outside the monitor's frame. Two separate things going on:
+
+- **Boot menu outside the frame**: real bug, this session's earlier "decouple entirely" fix
+  (a guessed fixed-percentage sheet) was never actually aligned to what's rendered underneath.
+  Replaced with the clamped-cover-fit approach — see "Mobile — open design problem" above.
+  This one's now pixel-accurate, not guessed.
+- **Swipe direction / tap still broken**: asked the user directly which content should appear
+  on which swipe direction (monitor is screen-left, aquarium is screen-right in the room
+  composition), giving concrete before/after previews for both options. They confirmed the
+  **currently-shipped** direction (swipe left → aquarium, content-follows-finger) is the one
+  they want — i.e. no code change needed here, this was already correct as of the previous
+  commit (`7bd5d7b`). Verified again via fresh Playwright drag test (dragging left does show
+  the aquarium, dragging right shows the monitor — matches). Likely explanation for the
+  "still wrong" report: the phone was probably testing a cached copy of the page from before
+  `7bd5d7b` landed — **if this comes up again, ask the user to hard-refresh / clear cache
+  before re-diagnosing the interaction logic itself.**
 
 ### Next up
 - Vercel deployment + `portfolio.debanik.com` DNS still need to be wired up on the
