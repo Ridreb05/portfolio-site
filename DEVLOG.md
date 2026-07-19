@@ -346,6 +346,53 @@ cover-fit math was pushing the terminal almost entirely off-screen on portrait p
 pre-existing bug this session's mobile-tap fix finally made reachable/visible in testing.
 See "Mobile — open design problem, SOLVED" above for the fix.
 
+### 2026-07-19 (later session, cont'd) — the CSS fix wasn't the real bug
+
+User reported, after the `touch-action`/`overscroll-behavior` CSS fix above shipped, that
+tapping the monitor **still** didn't work on a real phone, and that dragging felt "janky" —
+specifically asked for it to feel like "swiping a zoomed-in image." Root-caused for real
+this time (Playwright's synthetic touch emulation had been misleadingly passing this whole
+time — see note below):
+
+The previous `touchstart` handler snapped `mouseCurrent` (not just `mouseTarget`) straight to
+the touch position *and* called `updateHoverMonitor()` synchronously. That's what "janky"
+was: the instant you touched the screen — before dragging at all — the whole pan jumped to
+center on your finger. On a real phone, the tiniest bit of finger jitter during that jump
+(everyone has some) also meant `hoverMonitor` could be evaluated at a slightly different spot
+than intended, right as the tap-vs-drag decision was being made.
+
+Fixed by fully decoupling "where is the finger" from "what does the pan show":
+- `touchstart` no longer touches `mouseTarget`/`mouseCurrent` at all — a bare tap now causes
+  **zero** visual change (verified via screenshot diff: touching down and holding for 400ms
+  produces a pixel-identical frame to not having touched at all).
+- The monitor hit-test (`computeMonitorUV`, refactored out of `updateHoverMonitor`) takes the
+  screen point being tested and the pan source as *separate* parameters. For an active,
+  not-yet-moved touch, it tests the touch's real screen position against whatever pan is
+  *already* on screen — not one this touch would newly cause. This is what actually fixes
+  "can't tap the monitor": the hit-test no longer depends on the tap itself perturbing the
+  thing it's testing against.
+- `touchmove` only starts moving anything once the finger has moved >12px total from
+  touchstart (`TOUCH_TAP_THRESHOLD` — distinguishes an intentional drag from tap jitter). Once
+  past that threshold, it's 1:1 with the finger (`mouseCurrent.copy(mouseTarget)` directly, no
+  lerp lag) — the "swipe a zoomed photo" feel that was asked for, replacing the old continuous
+  lerp-eased tracking.
+- The actual warp-toggle is now driven directly from `touchend` (checking `hoverMonitor`,
+  respecting the same "tapping inside the terminal doesn't un-warp" rule via `e.target.closest
+  ('#terminal')`), with `e.preventDefault()` to stop the browser's compatibility `click` from
+  double-handling the same tap. The `click` listener is kept for mouse/desktop, unchanged.
+
+Caught one regression before it shipped: removing `updateHoverMonitor()` from `touchstart`
+broke a fast synthetic tap in testing (`hoverMonitor` only got refreshed inside `tick()`'s
+rAF loop, and a fast tap could complete before the next frame ran) — added back a synchronous
+`updateHoverMonitor()` call in `touchstart`, which is safe now since the function no longer
+has the side effect of moving the pan.
+
+**Lesson on testing methodology**: `page.touchscreen.tap()` (Playwright's real touch-input
+pipeline, goes through Chrome's actual touch→click synthesis) is what caught this — an
+earlier test in this same investigation used raw `dispatchEvent(new TouchEvent(...))`, which
+does *not* trigger real click synthesis and does not reproduce real device tap-cancellation
+behavior; don't trust that method for touch-interaction testing again.
+
 ### Next up
 - Vercel deployment + `portfolio.debanik.com` DNS still need to be wired up on the
   user's end (debanik.com is already on Vercel; portfolio-os needs its own project +

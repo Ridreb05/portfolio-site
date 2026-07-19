@@ -863,44 +863,85 @@
           1.0 - e.clientY / window.innerHeight
         );
       }, { passive: true });
+      /* ─── Touch: tap-to-warp + drag-to-look ─────────────────────────────
+         Two lessons learned the hard way in this file's history:
+         1. Snapping mouseTarget/mouseCurrent to the touch point on touchstart
+            (the old approach) caused a visible "jump" the instant you touched
+            the screen, before you'd even decided to drag — that's what read
+            as "janky". A tap should do NOTHING to the pan; only an actual
+            drag (past a small threshold, so finger jitter on a still tap
+            doesn't count) should move anything, and it should track the
+            finger exactly (no lerp lag) — like swiping a zoomed-in photo.
+         2. The monitor tap hit-test must NOT depend on the pan having been
+            updated by this same touch (see mistake #1) — it has to ask "is
+            the pixel *currently* on screen at this touch point the monitor",
+            using whatever pan is already in effect, not one this touch would
+            newly cause. That's what computeMonitorUV's separate
+            panSourceXFrac param is for: screen point and pan source are
+            independent inputs. */
       let lastTouch = null;
+      let touchStartPoint = null;
+      let touchMoved = false;
+      const TOUCH_TAP_THRESHOLD = 12; // px of total movement before a touch counts as a drag, not a tap
+
       window.addEventListener('touchstart', e => {
         uniforms.uIsTouch.value = 1.0;
-        /* Snap (no lerp) so a tap-to-warp on the monitor is recognized
-           immediately — a bare tap never fires touchmove, so waiting
-           on the lerp would leave hoverMonitor stale at the old position. */
         const t0 = e.touches[0];
         if (t0) {
-          mouseTarget.set(
-            t0.clientX / window.innerWidth,
-            1.0 - t0.clientY / window.innerHeight
-          );
-          mouseCurrent.copy(mouseTarget);
-          updateHoverMonitor();
+          touchStartPoint = { x: t0.clientX, y: t0.clientY };
           lastTouch = { x: t0.clientX, y: t0.clientY };
+          touchMoved = false;
+          /* Refresh hoverMonitor synchronously (don't wait for the next rAF
+             tick) -- a fast tap can finish touchstart->touchend before tick()
+             gets a chance to run, which would leave hoverMonitor stale. Safe
+             now (unlike the old version) since updateHoverMonitor no longer
+             mutates mouseCurrent/mouseTarget as a side effect. */
+          updateHoverMonitor();
         }
       }, { passive: true });
       window.addEventListener('touchmove', e => {
         const t0 = e.touches[0];
-        /* Natural (content-follows-finger) drag: once a finger is already down and
-           moving, advance the pan by the finger's DELTA rather than snapping to its
-           new absolute position. Dragging right pulls the room left-to-right with
-           the finger, matching native scroll/pan conventions, instead of the old
-           "camera chases the touch point" feel. touchstart above is untouched (still
-           an absolute snap) so tap-to-warp accuracy on the monitor is unaffected. */
         if (lastTouch) {
-          const dx = (t0.clientX - lastTouch.x) / window.innerWidth;
-          const dy = (t0.clientY - lastTouch.y) / window.innerHeight;
-          mouseTarget.set(
-            Math.min(1, Math.max(0, mouseTarget.x - dx)),
-            Math.min(1, Math.max(0, mouseTarget.y + dy))
-          );
+          if (!touchMoved) {
+            const totalDx = t0.clientX - touchStartPoint.x;
+            const totalDy = t0.clientY - touchStartPoint.y;
+            if (Math.hypot(totalDx, totalDy) > TOUCH_TAP_THRESHOLD) touchMoved = true;
+          }
+          if (touchMoved) {
+            /* Natural (content-follows-finger) drag, 1:1 with the finger — dragging
+               right pulls the room left-to-right, matching native scroll/pan/photo-
+               swipe conventions instead of the old "camera chases the touch point"
+               feel. mouseCurrent is set directly (not just mouseTarget) so there's
+               no easing lag while actively dragging. */
+            const dx = (t0.clientX - lastTouch.x) / window.innerWidth;
+            const dy = (t0.clientY - lastTouch.y) / window.innerHeight;
+            mouseTarget.set(
+              Math.min(1, Math.max(0, mouseTarget.x - dx)),
+              Math.min(1, Math.max(0, mouseTarget.y + dy))
+            );
+            mouseCurrent.copy(mouseTarget);
+          }
         }
         lastTouch = { x: t0.clientX, y: t0.clientY };
       }, { passive: true });
-      window.addEventListener('touchend', () => { lastTouch = null; }, { passive: true });
+      window.addEventListener('touchend', e => {
+        const insideTerminal = e.target && e.target.closest && e.target.closest('#terminal');
+        if (!touchMoved && touchStartPoint && !insideTerminal) {
+          if (hoverMonitor) {
+            isWarped = !isWarped;
+          } else if (isWarped) {
+            isWarped = false;
+          }
+          // Stop the browser's compatibility "click" from re-handling (and
+          // potentially double-toggling) the tap we just handled ourselves.
+          e.preventDefault();
+        }
+        lastTouch = null;
+        touchStartPoint = null;
+      }, { passive: false });
 
-      // Click to warp
+      // Click to warp (mouse only in practice — handled touch taps preventDefault
+      // the synthetic click above, so this only fires for real mouse clicks)
       window.addEventListener('click', () => {
         if (hoverMonitor) {
           isWarped = !isWarped;
@@ -1233,31 +1274,53 @@
 
       const clock = new THREE.Clock();
 
-      // Calculate image-space mouse coords from mouseCurrent and refresh hoverMonitor.
-      // Shared by tick() (continuous mouse/drag tracking) and touchstart (so a bare
-      // tap is recognized before the click event, without waiting on a lerp/rAF).
-      function updateHoverMonitor() {
+      // Maps a screen point to image-space UV, given a (possibly different) pan
+      // source — see the touch-handling comment above for why these are separate:
+      // the point being tested and what's driving the pan don't have to be the
+      // same thing (they are for mouse hover; deliberately aren't for a fresh touch).
+      function computeMonitorUV(screenXFrac, screenYFracFlipped, panSourceXFrac) {
         const w = window.innerWidth, h = window.innerHeight;
         const scrAR = w / h;
         const imgAR = uniforms.uImgRes.value.x / uniforms.uImgRes.value.y;
 
-        let mUvX = mouseCurrent.x;
-        let mUvY = mouseCurrent.y;
+        let mUvX = screenXFrac;
+        let mUvY = screenYFracFlipped;
 
         if (scrAR > imgAR) {
           const s = imgAR / scrAR;
-          mUvY = (mouseCurrent.y - 0.5) * s + 0.5;
+          mUvY = (screenYFracFlipped - 0.5) * s + 0.5;
         } else {
           const s = scrAR / imgAR;
           const panRange = (scrAR < 1.1) ? 1.0 : 0.4;
-          const pan = (mouseCurrent.x - 0.5) * panRange;
-          mUvX = (mouseCurrent.x - 0.5) * s + 0.5 + pan * (1.0 - s);
+          const pan = (panSourceXFrac - 0.5) * panRange;
+          mUvX = (screenXFrac - 0.5) * s + 0.5 + pan * (1.0 - s);
         }
 
-        const mP = { x: mUvX, y: 1.0 - mUvY };
+        return { x: mUvX, y: 1.0 - mUvY };
+      }
 
-        // Bounding box for monitor hover (covers frame and screen)
-        hoverMonitor = (mP.x >= 0.08 && mP.x <= 0.44 && mP.y >= 0.20 && mP.y <= 0.70);
+      function isMonitorUV(uv) {
+        return uv.x >= 0.08 && uv.x <= 0.44 && uv.y >= 0.20 && uv.y <= 0.70;
+      }
+
+      // Refreshes the shared `hoverMonitor` flag every frame (glow effect) and
+      // on-demand for touch taps. While a touch is down and hasn't moved past
+      // the tap threshold, test its actual screen position (not mouseCurrent,
+      // which a fresh tap deliberately leaves untouched — see above); otherwise
+      // (mouse, or an active drag) mouseCurrent already represents "where to
+      // look", same as it always has.
+      function updateHoverMonitor() {
+        let uv;
+        if (uniforms.uIsTouch.value > 0.5 && lastTouch && !touchMoved) {
+          uv = computeMonitorUV(
+            lastTouch.x / window.innerWidth,
+            1.0 - lastTouch.y / window.innerHeight,
+            mouseCurrent.x
+          );
+        } else {
+          uv = computeMonitorUV(mouseCurrent.x, mouseCurrent.y, mouseCurrent.x);
+        }
+        hoverMonitor = isMonitorUV(uv);
         return hoverMonitor;
       }
 
