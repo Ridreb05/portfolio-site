@@ -280,16 +280,25 @@ any of this):
 - DNS: `portfolio.debanik.com` needs a CNAME (or A/ALIAS per host's instructions)
   added wherever `debanik.com`'s DNS is managed. Also the user's own to do.
 
+### Later sessions (portfolio-os) — see that repo's own README/git log now
+
+`portfolio-os` got pushed to GitHub (github.com/Ridreb05/portfolio-os), filled with
+real resume content, then went through a full UI pass (macOS-style menu bar/traffic
+lights/dock magnify + a genuine phone-home-screen mobile layout), and most recently a
+rebrand to **"Dreb OS"**, custom-cursor removal, a Finder (virtual filesystem browser)
+app, and a Settings app (theme/accent/wallpaper, persisted). This repo's boot text was
+updated to match ("booting Dreb OS..." / "DREB OS" heading) so the handoff is
+consistent. From here on, **portfolio-os's own README.md is the source of truth for
+that app** — this file only needs to track this repo's own concerns.
+
 ### Next up
-- **Get portfolio-os pushed to GitHub + deployed**, per the blockers above — this is
-  the immediate next step, blocked on the user.
 - **Decide the mobile approach for THIS repo's terminal/warp** (see mobile section
   above) — separate concern from portfolio-os's own (already-solved) responsive
   design, since this repo's terminal still only needs to work well enough to reach
-  the "unlock" moment and hand off; the real fully-responsive experience is now on
-  the other side of the redirect.
-- Real portfolio content (bio, projects, resume, contact) still needs to be written
-  into `portfolio-os`'s three placeholder apps.
+  the "unlock" moment and hand off.
+- Vercel deployment + `portfolio.debanik.com` DNS still need to be wired up on the
+  user's end (debanik.com is already on Vercel; portfolio-os needs its own project +
+  custom domain there).
 - Minor polish candidates carried over from the first review, still open: compress
   `hero.png`/`monitorclose.png` (large), decide fate of unused `monitorcloseup.png`,
   add SEO/meta tags, accessibility pass.
