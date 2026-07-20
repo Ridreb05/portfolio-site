@@ -451,6 +451,12 @@
   uniform sampler2D uCloseTex;
   uniform float     uMonitorHover;
   uniform float     uWarpProgress;
+  uniform float     uScreenZoom; /* 0..1: continues the warp zoom, from "whole monitor
+                                     screen visible" to "screen fills the viewport", so
+                                     going fullscreen reads as one continuous push into
+                                     the screen instead of a DOM box growing over a
+                                     static background. Driven during the terminal's
+                                     "expanding" transition only -- see runUnlockSequence. */
   uniform vec2      uRes;
   uniform vec2      uImgRes;
   uniform float     uLoop;  /* 0..1, perfectly periodic for looping fx */
@@ -786,7 +792,41 @@
     if (uWarpProgress > 0.001) {
       // Zoom close texture slightly for alignment parallax
       vec2 uvClose = mix((uv - vec2(0.5)) * 1.1 + vec2(0.5), uv, uWarpProgress);
-      vec4 closeCol = texture2D(uCloseTex, uvClose);
+
+      /* Fullscreen hand-off: continue zooming from "whole monitor screen
+         visible" to "screen fills the viewport" as uScreenZoom ramps 0->1,
+         so the DOM terminal box growing to fullscreen (see positionTerminal/
+         runUnlockSequence in the script below) is matched by the screen's
+         own bezel visually zooming out of frame at the same rate -- one
+         continuous push into the screen instead of a box growing over a
+         static backdrop. Constants are SCREEN_RECT/CLOSE_IMG_W/H below,
+         converted to UV fractions and hardcoded here (same duplication
+         tradeoff as the room-scene cover-fit/pan math already has between
+         shader and JS -- see DEVLOG known issue #9). */
+      // Independently cover-fit vUv into just the screen rect (same pattern as
+      // the top-of-shader cover-fit, targeting a sub-rectangle instead of the
+      // whole image), producing the UV monitorclose.png would need to sample
+      // for "the screen rect fills the viewport". Cross-fading uvClose -> that
+      // via uScreenZoom (rather than composing an affine remap on top of the
+      // already-transformed uvClose, which was tried first and zoomed the
+      // wrong way — verified by hand-tracing screen-edge pixel positions) is
+      // what actually zooms in, not out.
+      float subAR = 1.126862; // aspect ratio of just the screen rect (rect W/H)
+      vec2 zoomUv = vUv;
+      if (scrAR > subAR) {
+        float ss = subAR / scrAR;
+        zoomUv.y = (vUv.y - 0.5) * ss + 0.5;
+      } else {
+        float ss = scrAR / subAR;
+        zoomUv.x = (vUv.x - 0.5) * ss + 0.5;
+      }
+      vec2 screenOrigin = vec2(0.196303, 0.141155); // left/CLOSE_IMG_W, top/CLOSE_IMG_H
+      vec2 screenSize   = vec2(0.593907, 0.527039); // (right-left)/W, (bottom-top)/H
+      vec2 uvFullyZoomed = screenOrigin + zoomUv * screenSize;
+
+      vec2 uvScreen = mix(uvClose, uvFullyZoomed, uScreenZoom);
+
+      vec4 closeCol = texture2D(uCloseTex, uvScreen);
       col.rgb = mix(col.rgb, closeCol.rgb, uWarpProgress);
     }
 
@@ -834,12 +874,31 @@
       let hoverMonitor = false;
       let isWarped = false;
 
+      /* Drives uScreenZoom over an exact real-time duration (not a per-frame
+         exponential ease like uWarpProgress/uMonitorHover) so it stays in
+         lockstep with the terminal box's own CSS transition regardless of
+         frame rate — a frame-rate-based ease needs a fixed *number* of
+         frames to converge, which stretches out in wall-clock time on a
+         slow device and would visibly desync from the box's fixed-duration
+         grow-to-fullscreen animation. */
+      function tweenScreenZoom(duration) {
+        const start = performance.now();
+        function step(now) {
+          const raw = Math.min(1, (now - start) / duration);
+          const eased = raw < 0.5 ? 4 * raw * raw * raw : 1 - Math.pow(-2 * raw + 2, 3) / 2;
+          uniforms.uScreenZoom.value = eased;
+          if (raw < 1) requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+      }
+
       const uniforms = {
         uTex: { value: null },
         uMonitorTex: { value: null },
         uCloseTex: { value: null },
         uMonitorHover: { value: 0.0 },
         uWarpProgress: { value: 0.0 },
+        uScreenZoom: { value: 0.0 },
         uRes: { value: new THREE.Vector2() },
         uImgRes: { value: new THREE.Vector2(1, 1) },
         uLoop: { value: 0 },
@@ -1184,6 +1243,7 @@
         terminal.classList.remove('active', 'glitching', 'expanding');
         terminal.style.pointerEvents = '';
         terminal.style.left = terminal.style.top = terminal.style.width = terminal.style.height = '';
+        uniforms.uScreenZoom.value = 0;
         termOutput.innerHTML = '';
         bootMenu.style.display = '';
         unlocked = false;
@@ -1221,7 +1281,11 @@
         // 1. glitch in place
         setTimeout(() => terminal.classList.add('glitching'), glitchStart);
 
-        // 2. "warp to fullscreen" — the terminal box itself expands edge-to-edge
+        // 2. "warp to fullscreen" — the terminal box expands edge-to-edge WHILE the
+        // shader keeps zooming into the screen (uScreenZoom, tweened over the exact
+        // same expandDur) at the same time, so the bezel visually zooms out of frame
+        // in step with the DOM box growing — reads as one continuous push into the
+        // screen, not a box growing over a static background.
         setTimeout(() => {
           terminal.classList.remove('glitching');
           terminal.classList.add('expanding');
@@ -1229,6 +1293,7 @@
           terminal.style.top = '0px';
           terminal.style.width = '100vw';
           terminal.style.height = '100vh';
+          tweenScreenZoom(expandDur);
         }, glitchStart + glitchDur);
 
         // 3. once fullscreen, cross-fade in the OS-boot placeholder and cut the room music

@@ -424,6 +424,60 @@ the boot menu renders outside the monitor's frame. Two separate things going on:
   `7bd5d7b` landed — **if this comes up again, ask the user to hard-refresh / clear cache
   before re-diagnosing the interaction logic itself.**
 
+### 2026-07-19 (later session, cont'd) — seamless zoom into fullscreen
+
+User asked: when the terminal expands to fullscreen (the "warp to fullscreen" step in
+`runUnlockSequence`), make it feel like a continuous camera zoom into the screen instead of a
+DOM box growing over a static background.
+
+Before this, the WebGL background was already fully "warped in" (cover-fit on
+`monitorclose.png`, filling the viewport) by the time the terminal box grows — the box
+expanding was the *only* motion, over an unmoving backdrop. Added a second shader-driven zoom
+stage, `uScreenZoom` (0→1), that continues zooming from "whole monitor screen visible" to
+"screen fills the viewport", timed to the same `expandDur` (700ms) as the box's own CSS
+transition — so the bezel visually zooms out of frame in step with the box growing.
+
+**Two real bugs found and fixed while building this, both worth remembering:**
+
+1. First implementation composed an affine remap directly on top of `uvClose` (itself already
+   a cover-fit-transformed coordinate) to send the screen rect's UV bounds to `[0,1]`. Verified
+   by hand-tracing specific screen-pixel → texture-coordinate mappings: it zoomed **out**, not
+   in (confirmed empirically too — screenshots at `uScreenZoom=0.5` showed a *smaller* monitor
+   than at `0`). Composing a "rect→unit-square" affine map on top of an *already*
+   cover-fit-compressed coordinate doesn't behave like applying it to raw screen position — the
+   two compositions aren't equivalent, and this cost real debugging time to untangle. **Fixed**
+   by computing the zoomed UV *independently*: cover-fit `vUv` into just the screen sub-rect
+   using the exact same pattern as the existing top-level cover-fit (just targeting a
+   sub-rectangle's aspect ratio instead of the whole image), then `mix(uvClose, uvFullyZoomed,
+   uScreenZoom)` — a straight cross-fade between two independently-correct UV mappings, rather
+   than composed transform coefficients. Verified with 5 static screenshots at
+   `uScreenZoom` = 0/0.25/0.5/0.75/1.0 (bypassing all animation/timing) showing a clean,
+   monotonic zoom from "whole monitor visible" to "pure black, screen fills frame edge-to-edge".
+   **Lesson**: don't compose a new remap on top of an existing transformed coordinate without
+   verifying by hand which direction it actually goes — "the algebra checks out at the
+   boundaries" isn't sufficient, trace an actual fixed screen pixel through the whole chain.
+
+2. First timing implementation eased `uScreenZoom` per-frame in `tick()` (same exponential
+   `+= (target - current) * rate` pattern as `uWarpProgress`/`uMonitorHover`). This desyncs from
+   a **fixed-duration** CSS transition under variable frame rate: a frame-based ease needs a
+   fixed *number* of frames to converge, which takes longer in wall-clock time exactly when
+   frame rate drops (e.g. this dev environment's software GL renderer) — precisely when you'd
+   also worry most about the two animations matching up. **Fixed** by switching to a
+   `performance.now()`-based tween over the exact same `expandDur`, so it's duration-accurate
+   regardless of frame rate, matching the CSS transition's own timing guarantee.
+
+Also discovered along the way, purely a test-environment artifact (not a real bug): in this
+sandboxed Chromium + `--use-gl=swiftshader` setup, `page.wait_for_timeout()`-based polling gave
+wildly inconsistent apparent timing for the same operation across different test scripts (one
+showed the transition already finished at +600ms, another showed it not yet started at
++3200ms) — likely `page.evaluate()`/`page.screenshot()` round-trip overhead accumulating
+unaccounted extra real time between "waits," compounded by SwiftShader's software rendering
+competing for main-thread time. **Don't trust nominal `wait_for_timeout` sums as real elapsed
+time in this environment** — either poll for a specific DOM/state condition (e.g.
+`classList.contains(...)`) before measuring from that point, or bypass timing entirely by
+setting the driving value directly (as done for the static zoom-level screenshots above) when
+what you actually need to verify is the transform math, not the animation's temporal behavior.
+
 ### Next up
 - Vercel deployment + `portfolio.debanik.com` DNS still need to be wired up on the
   user's end (debanik.com is already on Vercel; portfolio-os needs its own project +
